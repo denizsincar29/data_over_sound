@@ -3,6 +3,7 @@ import parse
 from webbrowser import open as wopen
 import os
 from sys import exit  # stupid pyinstaller bug, it doesn't work without this line
+from command_validator import CommandValidator, ValidationError
 
 class Output:
     def __init__(self):
@@ -29,61 +30,116 @@ help = """
 /sendhelp - sends each line of this message as a separate message via sound
 """
 
+# Initialize command validator
+validator = CommandValidator()
+
+# Define /p command (protocol)
+validator.add_command("p") \
+    .integer("protocol_number", minimum=0, maximum=11, description="protocol number") \
+    .integer("payload_length", 
+             required=lambda f: f.protocol_number >= 9,
+             minimum=4, maximum=64, 
+             description="payload length",
+             default=None)
+
+# Define /reset command
+validator.add_command("reset")
+
+# Define /open command
+validator.add_command("open")
+
+# Define /exit command
+validator.add_command("exit")
+
+# Define /device command
+validator.add_command("device")
+
+# Define /help command
+validator.add_command("help")
+
+# Define /sendhelp command
+validator.add_command("sendhelp")
+
+
+def handle_protocol_command(parsed):
+    """Handler for /p command"""
+    g.protocol = parsed.protocol_number
+    toreturn = f"protocol set to {g.protocol}. "
+    
+    if parsed.payload_length is not None:
+        g.switchinstance(parsed.payload_length)
+        return toreturn + f"payload length {parsed.payload_length}"
+    else:
+        g.switchinstance(-1)
+        return toreturn
+
+
+def handle_reset_command(parsed):
+    """Handler for /reset command"""
+    g.switchinstance(-1)
+    return "instance reset"
+
+
+def handle_open_command(parsed):
+    """Handler for /open command"""
+    result = output.parse()
+    for url in result["urls"]:
+        wopen(url)
+    for email in result["emails"]:
+        wopen("mailto:"+email)
+    for phone in result["phones"]:
+        wopen("tel:"+phone)
+    return "opening"
+
+
+def handle_exit_command(parsed):
+    """Handler for /exit command"""
+    g.stop()
+    exit()
+
+
+def handle_device_command(parsed):
+    """Handler for /device command"""
+    os.remove("devices.json")
+    input("!Press enter and restart the program. It will start with the device test prompt.")
+    g.stop()
+    exit()
+
+
+def handle_help_command(parsed):
+    """Handler for /help command"""
+    return help
+
+
+def handle_sendhelp_command(parsed):
+    """Handler for /sendhelp command"""
+    for i in help.split("\n"):
+        g.send(i)
+    return "sending"
+
+
+# Register handlers
+validator.get_command("p").set_handler(handle_protocol_command)
+validator.get_command("reset").set_handler(handle_reset_command)
+validator.get_command("open").set_handler(handle_open_command)
+validator.get_command("exit").set_handler(handle_exit_command)
+validator.get_command("device").set_handler(handle_device_command)
+validator.get_command("help").set_handler(handle_help_command)
+validator.get_command("sendhelp").set_handler(handle_sendhelp_command)
+
 
 def command(cmd):
+    """Process a command or message"""
     if not cmd.startswith("/"):
         g.send(cmd)
         return "sending"
-    c=cmd.split(" ")
+    
     try:
-        match c[0]:
-            case "/p":
-                if int(c[1])<0 or int(c[1])>11:  # there are 4 protocols, each with 3 sending speeds
-                    return ("specify protocol between 0 and 11")
-                g.protocol=int(c[1])
-                toreturn=f"protocol set to {str(g.protocol)}. "
-                if len(c)>2:  # if there is a payload length
-                    if c[2]=="-":  # if the payload length is set to default
-                        g.switchinstance(-1)
-                        return toreturn
-                    if int(c[2])<4 or int(c[2])>64:
-                        return ("invalid payload length. it must be between 4 and 64")
-                    g.switchinstance(int(c[2]))
-                    return toreturn+(" payload length "+str(c[2]))
-                else:  # if there is no payload length
-                    if int(c[1])>8:
-                        return ("protocols 9 to 11 needs a payload length. specify a length after the protocol number")
-                    g.switchinstance(-1)
-                    return toreturn
-            case "/reset":  # if data starts to get corrupted, this command can be used to reset the instance
-                g.switchinstance(-1)
-                return ("instance reset")
-            case "/open":
-                result = output.parse()
-                for url in result["urls"]:
-                    wopen(url)
-                for email in result["emails"]:
-                    wopen("mailto:"+email)
-                for phone in result["phones"]:
-                    wopen("tel:"+phone)
-                return "opening"
-
-            case "/exit":
-                g.stop()
-                exit()
-            case "/device":
-                os.remove("devices.json")
-                input("!Press enter and restart the program. It will start with the device test prompt.")
-                g.stop()
-                exit()
-            case "/help":
-                return help
-            case "/sendhelp":
-                for i in help.split("\n"):
-                    g.send(i)
-                return "sending"
+        return validator.execute(cmd)
+    except ValidationError as e:
+        return str(e)
     except Exception as e:
-        return (e)
+        return str(e)
 
 try:
     print("Welcome to data_over_sound")
