@@ -1,100 +1,155 @@
+"""
+Sound device configuration module.
+
+Handles testing and selection of audio input/output devices.
+"""
+
 from os.path import exists
 import json
 import numpy as np
 import sounddevice as sd
 
+# Default device configuration
 devs = [-1, -1]
-s = sd.query_devices()
-start_idx = 0
-samplerate = 44100
-amplitude = 0.2
-frequency = 440
+
+# Audio parameters for device testing
+_SAMPLERATE = 44100
+_AMPLITUDE = 0.2
+_FREQUENCY = 440
 
 
-def incallback(indata, outdata, frames, time, status):
-    if status:
-        print(status)
-    outdata[:] = indata
-
-
-def sinecallback(outdata, frames, time, status):
-    if status:
-        print(status)
-    global start_idx
-    t = (start_idx + np.arange(frames)) / samplerate
-    t = t.reshape(-1, 1)
-    outdata[:] = amplitude * np.sin(2 * np.pi * frequency * t)
-    start_idx += frames
+class DeviceTestContext:
+    """Context for device testing to avoid global state."""
+    
+    def __init__(self):
+        self.start_idx = 0
+        self.samplerate = _SAMPLERATE
+    
+    def incallback(self, indata, outdata, frames, time, status):
+        """Callback for input device testing (echo)."""
+        if status:
+            print(status)
+        outdata[:] = indata
+    
+    def sinecallback(self, outdata, frames, time, status):
+        """Callback for output device testing (sine wave)."""
+        if status:
+            print(status)
+        t = (self.start_idx + np.arange(frames)) / self.samplerate
+        t = t.reshape(-1, 1)
+        outdata[:] = _AMPLITUDE * np.sin(2 * np.pi * _FREQUENCY * t)
+        self.start_idx += frames
 
 
 def testoutput():
-    global samplerate
+    """Test and select output audio device."""
+    context = DeviceTestContext()
+    devices = sd.query_devices()
+    
     while True:
-        for d in s:
+        for d in devices:
             if d["max_output_channels"] == 0:
                 continue
-            samplerate = d["default_samplerate"]
+            context.samplerate = d["default_samplerate"]
             try:
                 with sd.OutputStream(
                     device=d["index"],
                     channels=1,
-                    callback=sinecallback,
-                    samplerate=samplerate,
+                    callback=context.sinecallback,
+                    samplerate=context.samplerate,
                 ):
-                    if "y" in input(
-                        "this is "
-                        + d["name"]
-                        + " is playing sound. if you prefer this device, and you here the sound, type y, otherwise just press enter"
-                    ):
+                    response = input(
+                        f"This is {d['name']} playing sound. "
+                        "If you prefer this device, and you hear the sound, "
+                        "type y, otherwise just press enter: "
+                    )
+                    if "y" in response.lower():
                         return d["index"]
-            except Exception as e:
-                print("error openning ", d["name"], e)
-                input("press enter")
             except KeyboardInterrupt:
                 exit()
-        input("no sounddevice selected. press enter to loop over")
+            except Exception as e:
+                print(f"Error opening {d['name']}: {e}")
+                input("Press enter to continue")
+        input("No sound device selected. Press enter to loop over")
 
 
-def testinput():
-    input(
-        "now testing your microphone or other input device. after you press enter, we will go through all input devices and choose a device for you. while testing, you will hear your microphone or other device. if you don't hear it, just skip it. press enter to start"
+def testinput(output_device_index):
+    """
+    Test and select input audio device.
+    
+    Args:
+        output_device_index: Index of output device to use for echo test
+    """
+    print(
+        "\nNow testing your microphone or other input device. "
+        "After you press enter, we will go through all input devices "
+        "and choose a device for you. While testing, you will hear your "
+        "microphone or other device. If you don't hear it, just skip it."
     )
-    global samplerate
+    input("Press enter to start")
+    
+    context = DeviceTestContext()
+    devices = sd.query_devices()
+    
     while True:
-        for d in s:
+        for d in devices:
             if d["max_input_channels"] == 0:
                 continue
-            samplerate = d["default_samplerate"]
+            context.samplerate = d["default_samplerate"]
             try:
                 with sd.Stream(
-                    device=(d["index"], devs[1]),
+                    device=(d["index"], output_device_index),
                     channels=1,
-                    callback=incallback,
-                    samplerate=samplerate,
+                    callback=context.incallback,
+                    samplerate=context.samplerate,
                 ):
-                    if "y" in input(
-                        "this is "
-                        + d["name"]
-                        + " is playing sound. if you prefer this device, and you here the sound, type y, otherwise just press enter"
-                    ):
+                    response = input(
+                        f"This is {d['name']} playing sound. "
+                        "If you prefer this device, and you hear the sound, "
+                        "type y, otherwise just press enter: "
+                    )
+                    if "y" in response.lower():
                         return d["index"]
             except KeyboardInterrupt:
                 exit()
             except Exception as e:
-                print("error openning ", d["name"], e)
-                input("press enter")
-        input("no sounddevice selected. press enter to loop over")
+                print(f"Error opening {d['name']}: {e}")
+                input("Press enter to continue")
+        input("No sound device selected. Press enter to loop over")
 
 
 def test():
+    """Run device testing and save configuration."""
     global devs
     devs[1] = testoutput()
-    devs[0] = testinput()
+    devs[0] = testinput(devs[1])
     with open("devices.json", "w", encoding="UTF-8") as f:
-        f.write(json.dumps(devs))
+        json.dump(devs, f)
 
 
+def load_devices():
+    """Load device configuration from file with validation."""
+    global devs
+    try:
+        with open("devices.json", encoding="UTF-8") as f:
+            loaded_devs = json.load(f)
+            
+        # Validate format
+        if not isinstance(loaded_devs, list) or len(loaded_devs) != 2:
+            raise ValueError("Invalid devices.json format")
+        if not all(isinstance(d, int) for d in loaded_devs):
+            raise ValueError("Device indices must be integers")
+            
+        devs = loaded_devs
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+        print(f"Error loading devices.json: {e}")
+        print("Running device configuration...")
+        test()
+
+
+# Only run device configuration if this module is imported
+# (not when testing or importing for other purposes)
 if not exists("devices.json"):
     test()
-with open("devices.json", encoding="UTF-8") as f:
-    devs = json.loads(f.read())
+else:
+    load_devices()

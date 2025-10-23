@@ -17,11 +17,23 @@ This app leverages the Python library [ggwave](https://github.com/ggerganov/ggwa
 
 ### Prerequisites
 
+**UV Package Manager**: This project uses UV for dependency management. Install UV first:
+
+```bash
+# On macOS and Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Or using pip
+pip install uv
+```
+
 On **Windows**, ensure you set an environment variable to avoid installation issues with `ggwave`:
 
 ```cmd
 set GGWAVE_USE_CYTHON=1
 ```
+
+On **Unix/Linux/macOS**, you can set the environment variable directly in the UV commands (see below).
 
 ### Note:
 
@@ -38,23 +50,38 @@ pip install .
 
 ### Steps
 
-- **Install dependencies and run**:
+- **Install dependencies and run with UV**:
+    
+    **On Windows**:
+    ```cmd
+    set GGWAVE_USE_CYTHON=1
+    uv sync
+    uv run python main.py
+    ```
+    
+    **On Unix/Linux/macOS**:
+    ```bash
+    GGWAVE_USE_CYTHON=1 uv sync
+    uv run python main.py
+    ```
+    
+    Alternatively, you can set the environment variable in your shell profile to make it permanent:
+    ```bash
+    export GGWAVE_USE_CYTHON=1
+    ```
+
+- **Or install with pip** (not recommended, but still supported):
     ```bash
     pip install -r requirements.txt
     python3 main.py
     ```
-- ** or through poetry** (not working on windows):
-    ```bash
-    poetry install
-    poetry run python3 main.py
-    ```
-  
-It's recommended for unix users to use a virtual environment to avoid conflicts, but on your own risk you can just pip install the requirements.
+
+UV automatically creates and manages a virtual environment for you, isolating project dependencies.
 
 To compile the project, you need to have pyinstaller installed. After that, you can run the following command to compile the project. Note that windows users should set the same environment variable as mentioned above before running the command.
 
 ```bash
-pyinstaller main.spec
+uv run pyinstaller main.spec
 ```
 
 ## Usage
@@ -70,7 +97,6 @@ pyinstaller main.spec
 - **/p [protocol number] [payload length]**: Set protocol and payload length. Payload length is optional and must be between 4 and 64. It is only required for protocols 9 to 11 but can be set for all protocols.
 - **/reset**: Reset the instance. If data starts to get corrupted, this command can be used to reset the instance.
 - **/open**: Open URLs, emails, and phone numbers in the default web browser, email client, and phone dialer respectively. Use this command if a URL, email, or phone number is received. Use it at your own risk, as it may open malicious websites.
-- **/stop**: Stop the program (not working properly, use Ctrl+C instead).
 - **/exit**: Exit the program.
 - **/device**: Test sound devices.
 - **/sendhelp**: Sends each line of the help message as a separate message via sound.
