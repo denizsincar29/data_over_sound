@@ -74,7 +74,12 @@ def handle_exit_command(parsed):
 @validator.command("device")
 def handle_device_command(parsed):
     """Test sound devices"""
-    os.remove("devices.json")
+    try:
+        os.remove("devices.json")
+    except FileNotFoundError:
+        pass  # File already deleted, no problem
+    except OSError as e:
+        return f"Error removing devices.json: {e}"
     input("!Press enter and restart the program. It will start with the device test prompt.")
     g.stop()
     exit()

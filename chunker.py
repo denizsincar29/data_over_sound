@@ -1,69 +1,153 @@
-# this thing is used to encode a file into chunks for a data-over-sound transmitte r
-# optionally retrieve specific x-th chunk from a file
+"""
+File chunking module for data-over-sound transmission.
+
+This module provides functions to encode files into chunks for transmission
+and decode received chunks back into files.
+"""
 
 from rust_enum import enum, Case
-import os  # .path.getsize
+import os
 from math import ceil
+
+# Constants for chunk protocol
+CHUNK_INDEX_BYTES = 2
+NUM_CHUNKS_BYTES = 2
+FILE_SIZE_BYTES = 4
+CHUNK_HEADER_SIZE = CHUNK_INDEX_BYTES + NUM_CHUNKS_BYTES
+FILE_METADATA_HEADER = b'$$$$FILE'
+FILE_FOOTER = b'FEND$$$$'
+MIN_METADATA_SIZE = len(FILE_METADATA_HEADER) + FILE_SIZE_BYTES
+
 
 @enum
 class Result:
-    Ok = Case(value = bytearray)
-    Err = Case(value = list[int])  # list of indices that failed
+    """Result type for chunking operations."""
+    Ok = Case(value=bytearray)
+    Err = Case(value=list[int])  # list of indices that failed
+
 
 def chunk_by_idx(file, chunk_size, chunk_idcs=None):
+    """
+    Encode specific chunks from a file.
+    
+    Args:
+        file: Path to file to chunk
+        chunk_size: Size of each chunk in bytes
+        chunk_idcs: Indices of chunks to yield, or None for all chunks
+        
+    Yields:
+        Encoded chunks with headers
+    """
     file_size = os.path.getsize(file)
-    num_chunks = ceil(file_size / chunk_size)  # stupid python doesn't have // that divides and rounds to the upper integer
+    # Using ceil for integer division that rounds up
+    num_chunks = ceil(file_size / chunk_size)
+    
     with open(file, 'rb') as f:
-        if chunk_idcs is None:  # don't do this, use
+        if chunk_idcs is None:
             yield from chunk(file, chunk_size, called_from_chunk_by_idx=True)
-            return # don't do the following
+            return
         for i in chunk_idcs:
             f.seek(i * chunk_size)
-            # yield first 2 bytes as chunk index, second 2 bytes as total number of chunks, then the chunk
-            yield i.to_bytes(2, 'big') + num_chunks.to_bytes(2, 'big') + f.read(chunk_size)
+            # Yield chunk with index and total count headers
+            yield (i.to_bytes(CHUNK_INDEX_BYTES, 'big') + 
+                   num_chunks.to_bytes(NUM_CHUNKS_BYTES, 'big') + 
+                   f.read(chunk_size))
 
-# lets make an optimized version that yields all chunks without specifying indices
 def chunk(file, chunk_size, called_from_chunk_by_idx=False):
+    """
+    Encode all chunks from a file.
+    
+    Args:
+        file: Path to file to chunk
+        chunk_size: Size of each chunk in bytes
+        called_from_chunk_by_idx: Internal flag to skip metadata
+        
+    Yields:
+        Encoded chunks with headers, plus metadata and footer if not called internally
+        
+    Raises:
+        ValueError: If filename is too long for chunk size
+    """
     file_size = os.path.getsize(file)
     num_chunks = ceil(file_size / chunk_size)
-    # if not called from chunk_by_idx, yield the metadata
-    # metadata: b'$$$$FILE' header, 4 bytes for file size, rest of the bytes for the file name
+    
+    # Yield metadata header if not called internally
     if not called_from_chunk_by_idx:
-        yield b'$$$$FILE' + file_size.to_bytes(4, 'big') + file.encode("utf-8")  # well, if only filename won't be longer than chunksize-12!
+        filename_bytes = file.encode("utf-8")
+        metadata = FILE_METADATA_HEADER + file_size.to_bytes(FILE_SIZE_BYTES, 'big') + filename_bytes
+        
+        # Validate filename length
+        if len(metadata) > chunk_size:
+            raise ValueError(
+                f"Filename too long: {len(filename_bytes)} bytes. "
+                f"Maximum is {chunk_size - MIN_METADATA_SIZE} bytes for chunk_size={chunk_size}"
+            )
+        yield metadata
+    
+    # Yield file chunks
     with open(file, 'rb') as f:
-        for i, chunk in enumerate(iter(lambda: f.read(chunk_size), b'')): # read until EOF
-            yield i.to_bytes(2, 'big') + num_chunks.to_bytes(2, 'big') + chunk  # don't think that a chunk index will ever be >65536, or it will transfer a file for >1 week
-    # if not called from chunk_by_idx, yield the FEND$$$$ footer to not make the receiver wait 30 seconds for the next chunk
+        for i, chunk_data in enumerate(iter(lambda: f.read(chunk_size), b'')):
+            # Note: chunk index limited to 2 bytes (0-65535)
+            if i >= 2**16:
+                raise ValueError(f"File too large: exceeds maximum of {2**16} chunks")
+            yield (i.to_bytes(CHUNK_INDEX_BYTES, 'big') + 
+                   num_chunks.to_bytes(NUM_CHUNKS_BYTES, 'big') + 
+                   chunk_data)
+    
+    # Yield footer if not called internally
     if not called_from_chunk_by_idx:
-        yield b'FEND$$$$'
+        yield FILE_FOOTER
 
 
 def dechunk(chunk_list):
-    '''
-    dechunks a list of chunks into a file
-
-    args:
-        chunk_list: list of chunks, each chunk is a tuple of (chunk_idx, num_chunks, chunk_data)
-
-    returns:
-        Result.Ok if successful, Result.Err with a list of indices that failed
-    '''
-# delete all chunks that start with FEND$$$$ and $$$$FILE
-    chunk_list = [chunk for chunk in chunk_list if chunk[0:8] != b'FEND$$$$' and chunk[0:8] != b'$$$$FILE']
-    # sort the chunks by index via the first 2 bytes of the chunk
-    chunk_list.sort(key=lambda x: int.from_bytes(x[0:2], 'big'))
-    num_chunks = int.from_bytes(chunk_list[0][2:4], 'big')
-    file = bytearray()
-    chunk_idcs = [int.from_bytes(chunk[0:2], 'big') for chunk in chunk_list]
+    """
+    Decode a list of chunks back into file data.
+    
+    Args:
+        chunk_list: List of encoded chunks (bytes)
+        
+    Returns:
+        Result.Ok(bytearray) if successful with complete file data
+        Result.Err(list[int]) with list of missing chunk indices if incomplete
+        
+    Raises:
+        ValueError: If chunk_list is empty or malformed
+    """
+    if not chunk_list:
+        raise ValueError("chunk_list cannot be empty")
+    
+    # Filter out metadata and footer chunks
+    chunk_list = [
+        chunk for chunk in chunk_list 
+        if len(chunk) >= 8 and
+           chunk[0:8] != FILE_FOOTER and 
+           chunk[0:8] != FILE_METADATA_HEADER
+    ]
+    
+    if not chunk_list:
+        raise ValueError("No valid data chunks found")
+    
+    # Sort chunks by index
+    chunk_list.sort(key=lambda x: int.from_bytes(x[0:CHUNK_INDEX_BYTES], 'big'))
+    
+    # Get total number of chunks from first chunk
+    num_chunks = int.from_bytes(chunk_list[0][CHUNK_INDEX_BYTES:CHUNK_HEADER_SIZE], 'big')
+    
+    # Check for missing chunks
+    chunk_idcs = [int.from_bytes(chunk[0:CHUNK_INDEX_BYTES], 'big') for chunk in chunk_list]
     failed = [i for i in range(num_chunks) if i not in chunk_idcs]
+    
     if failed:
         return Result.Err(failed)
-    for i, chunk in enumerate(chunk_list):
-        chunk_idx = int.from_bytes(chunk[0:2], 'big')
-        # remove the chunk index
-        raw_chunk = chunk[4:]
-        file.extend(raw_chunk)
-    return Result.Ok(file)
+    
+    # Reassemble file data
+    file_data = bytearray()
+    for chunk in chunk_list:
+        # Extract data part (skip index and count headers)
+        raw_chunk = chunk[CHUNK_HEADER_SIZE:]
+        file_data.extend(raw_chunk)
+    
+    return Result.Ok(file_data)
 
 
 #[cfg(test)]  # this is a valid python comment that looks rusty
