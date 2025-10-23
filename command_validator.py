@@ -1,14 +1,21 @@
 """
-Command Validator - A fluent API for validating and parsing commands
+Command Validator - A decorator-based API for validating and parsing commands
 
-This module provides a flexible command validation system with a fluent interface.
+This module provides a flexible command validation system with a decorator interface.
 Example usage:
     validator = CommandValidator()
-    validator.add_command("protocol") \
-        .integer("protocol_number", minimum=0, maximum=11, description="protocol number") \
-        .integer("payload_length", required=lambda f: f.protocol_number >= 9, 
-                 minimum=4, maximum=64, description="payload length")
+    
+    @validator.command("protocol")
+    @validator.integer("protocol_number", minimum=0, maximum=11)
+    @validator.integer("payload_length", required=lambda f: f.protocol_number >= 9, minimum=4, maximum=64)
+    def handle_protocol(parsed):
+        '''Set protocol and payload length'''
+        # handler implementation
+        pass
 """
+
+import inspect
+from functools import wraps
 
 
 class ValidationError(Exception):
@@ -95,6 +102,7 @@ class Command:
         self.fields = []
         self.validator = validator
         self.handler = None
+        self.description = None
     
     def integer(self, name, minimum=None, maximum=None, required=True, 
                 description=None, default=None):
@@ -126,6 +134,12 @@ class Command:
     def set_handler(self, handler):
         """Set the handler function for this command"""
         self.handler = handler
+        # Extract description from handler's docstring
+        if handler and not self.description:
+            doc = inspect.getdoc(handler)
+            if doc:
+                # Use first line of docstring as description
+                self.description = doc.split('\n')[0].strip()
         return self
     
     def parse(self, args):
@@ -154,19 +168,130 @@ class Command:
         if self.handler:
             return self.handler(parsed)
         return None
+    
+    def get_help_text(self):
+        """Generate help text for this command"""
+        parts = [f"/{self.name}"]
+        
+        # Add field descriptions
+        for field in self.fields:
+            field_desc = field.name.replace('_', ' ')
+            parts.append(f"[{field_desc}]")
+        
+        help_line = " ".join(parts)
+        
+        # Add description if available
+        if self.description:
+            help_line += f" - {self.description}"
+        
+        return help_line
 
 
 class CommandValidator:
-    """Main command validator class with fluent API"""
+    """Main command validator class with decorator API"""
     
     def __init__(self):
         self.commands = {}
+        self._pending_fields = []
+        self._pending_command_name = None
     
     def add_command(self, name):
-        """Add a new command and return it for chaining"""
+        """Add a new command and return it for chaining (legacy API)"""
         command = Command(name, self)
         self.commands[name] = command
         return command
+    
+    def command(self, name):
+        """Decorator to register a command handler
+        
+        Usage:
+            @validator.command("commandname")
+            @validator.integer("field1", minimum=0, maximum=10)
+            def handler(parsed):
+                '''Command description from docstring'''
+                pass
+        """
+        def decorator(func):
+            # Create command if it doesn't exist
+            if name not in self.commands:
+                cmd = Command(name, self)
+                self.commands[name] = cmd
+            else:
+                cmd = self.commands[name]
+            
+            # Add any pending fields that were defined by decorators above
+            if hasattr(func, '_validator_fields'):
+                # Fields are stored in reverse order, so reverse them
+                for field in reversed(func._validator_fields):
+                    cmd.fields.append(field)
+            
+            # Set the handler and extract docstring
+            cmd.set_handler(func)
+            
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+            
+            return wrapper
+        
+        return decorator
+    
+    def integer(self, name, minimum=None, maximum=None, required=True, 
+                description=None, default=None):
+        """Decorator to add an integer field to a command
+        
+        Usage:
+            @validator.command("test")
+            @validator.integer("count", minimum=1, maximum=10)
+            def handler(parsed):
+                pass
+        """
+        def decorator(func):
+            field = CommandField(
+                name=name,
+                field_type="integer",
+                minimum=minimum,
+                maximum=maximum,
+                required=required,
+                description=description,
+                default=default
+            )
+            
+            # Store fields on the function for later retrieval
+            if not hasattr(func, '_validator_fields'):
+                func._validator_fields = []
+            func._validator_fields.append(field)
+            
+            return func
+        
+        return decorator
+    
+    def string(self, name, required=True, description=None, default=None):
+        """Decorator to add a string field to a command
+        
+        Usage:
+            @validator.command("test")
+            @validator.string("message")
+            def handler(parsed):
+                pass
+        """
+        def decorator(func):
+            field = CommandField(
+                name=name,
+                field_type="string",
+                required=required,
+                description=description,
+                default=default
+            )
+            
+            # Store fields on the function for later retrieval
+            if not hasattr(func, '_validator_fields'):
+                func._validator_fields = []
+            func._validator_fields.append(field)
+            
+            return func
+        
+        return decorator
     
     def get_command(self, name):
         """Get a command by name"""
@@ -211,3 +336,11 @@ class CommandValidator:
             return True
         except ValidationError:
             return False
+    
+    def generate_help(self):
+        """Generate help text from all registered commands"""
+        help_lines = []
+        for cmd_name in sorted(self.commands.keys()):
+            cmd = self.commands[cmd_name]
+            help_lines.append(cmd.get_help_text())
+        return "\n".join(help_lines)
