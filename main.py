@@ -1,19 +1,45 @@
+"""
+Main application entry point for data_over_sound.
+
+This module provides an interactive command-line interface for transmitting
+and receiving data over sound waves.
+"""
+
 import gw
 import parse
 from webbrowser import open as wopen
 import os
-from sys import exit  # stupid pyinstaller bug, it doesn't work without this line
+from sys import exit
 from command_validator import CommandValidator, ValidationError
 
+
 class Output:
+    """
+    Handler for received data output.
+    
+    Stores received data and provides parsing capabilities.
+    """
+    
     def __init__(self):
         self.data = ""
 
     def data_callback(self, data):
+        """
+        Callback function for received data.
+        
+        Args:
+            data: Received data string
+        """
         self.data = data
         print(data)
 
     def parse(self):
+        """
+        Parse stored data for URLs, emails, and phone numbers.
+        
+        Returns:
+            dict: Dictionary with 'urls', 'emails', and 'phones' keys
+        """
         return parse.extract_info(self.data)
 
 output = Output()
@@ -55,13 +81,47 @@ def handle_reset_command(parsed):
 def handle_open_command(parsed):
     """Open URLs, emails, and phone numbers in the default web browser, email client, and phone dialer respectively. Use this command if a url, email, or phone number is received. Use it on your own risk, as it may open malicious websites"""
     result = output.parse()
+    
+    # Show what will be opened and ask for confirmation
+    items_to_open = []
+    if result["urls"]:
+        items_to_open.extend([f"URL: {url}" for url in result["urls"]])
+    if result["emails"]:
+        items_to_open.extend([f"Email: {email}" for email in result["emails"]])
+    if result["phones"]:
+        items_to_open.extend([f"Phone: {phone}" for phone in result["phones"]])
+    
+    if not items_to_open:
+        return "No URLs, emails, or phone numbers found to open"
+    
+    print("\nThe following items will be opened:")
+    for item in items_to_open:
+        print(f"  - {item}")
+    
+    confirmation = input("Are you sure you want to open these? (y/N): ")
+    if confirmation.lower() != 'y':
+        return "Cancelled"
+    
+    # Open items after confirmation
     for url in result["urls"]:
-        wopen(url)
+        try:
+            wopen(url)
+        except Exception as e:
+            print(f"Error opening URL {url}: {e}")
+    
     for email in result["emails"]:
-        wopen("mailto:"+email)
+        try:
+            wopen(f"mailto:{email}")
+        except Exception as e:
+            print(f"Error opening email {email}: {e}")
+    
     for phone in result["phones"]:
-        wopen("tel:"+phone)
-    return "opening"
+        try:
+            wopen(f"tel:{phone}")
+        except Exception as e:
+            print(f"Error opening phone {phone}: {e}")
+    
+    return "Opened"
 
 
 @validator.command("exit")
@@ -113,13 +173,31 @@ def command(cmd):
     except Exception as e:
         return str(e)
 
-try:
+def main():
+    """Main application loop."""
     print("Welcome to data_over_sound")
     print("Type /help for help")
-    print("enter your message or command:")
-    while True:
-        cmd=input()  # don't show > prompt because it prints something else in another thread
-        print(command(cmd))
-except (KeyboardInterrupt, EOFError):
-    g.stop()
-    exit()
+    print("Enter your message or command:")
+    
+    try:
+        while True:
+            try:
+                cmd = input()
+                result = command(cmd)
+                if result:
+                    print(result)
+            except EOFError:
+                # End of input stream
+                break
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+    finally:
+        # Graceful cleanup
+        try:
+            g.stop()
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+
+
+if __name__ == "__main__":
+    main()
