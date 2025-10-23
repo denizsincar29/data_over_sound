@@ -23,7 +23,6 @@ help = """
 /p [protocol number] [payload length] - set protocol and payload length. payload length is optional and must be between 4 and 64. It is only required for protocols 9 to 11 but can be set for all protocols
 /reset - reset the instance. If data starts to get corrupted, this command can be used to reset the instance
 /open - open URLs, emails, and phone numbers in the default web browser, email client, and phone dialer respectively. Use this command if a url, email, or phone number is received. Use it on your own risk, as it may open malicious websites
-/stop - stop the program (not working properly, use ctrl+c instead)
 /exit - exit the program
 /device - test sound devices
 /help - display this message
@@ -69,8 +68,6 @@ def command(cmd):
                     wopen("tel:"+phone)
                 return "opening"
 
-            case "/stop":
-                g.stopcondition=True
             case "/exit":
                 g.stop()
                 exit()

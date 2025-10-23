@@ -97,7 +97,6 @@ uv run pyinstaller main.spec
 - **/p [protocol number] [payload length]**: Set protocol and payload length. Payload length is optional and must be between 4 and 64. It is only required for protocols 9 to 11 but can be set for all protocols.
 - **/reset**: Reset the instance. If data starts to get corrupted, this command can be used to reset the instance.
 - **/open**: Open URLs, emails, and phone numbers in the default web browser, email client, and phone dialer respectively. Use this command if a URL, email, or phone number is received. Use it at your own risk, as it may open malicious websites.
-- **/stop**: Stop the program (not working properly, use Ctrl+C instead).
 - **/exit**: Exit the program.
 - **/device**: Test sound devices.
 - **/sendhelp**: Sends each line of the help message as a separate message via sound.
