@@ -10,11 +10,13 @@ import parse
 from webbrowser import open as wopen
 import os
 import time
+import threading
 from sys import exit
 from command_validator import CommandValidator, ValidationError
 from file_sharing import FileSender, FileReceiver, FileSharingProtocol, try_to_utf8
 from settings_manager import settings
 from screen_reader_manager import screen_reader
+from command_manager import command_manager, AppAPI
 
 
 class Output:
@@ -24,10 +26,14 @@ class Output:
     Stores received data and provides parsing capabilities.
     """
 
-    def __init__(self):
+    def __init__(self, gw_instance=None):
         self.data = ""
         self.receiver = None
         self.sender = None
+        self.gw = gw_instance
+        self.query_active = False
+        self.query_functions = []
+        self.query_last_received = 0
 
     def data_callback(self, data):
         """
@@ -36,6 +42,64 @@ class Output:
         Args:
             data: Received data string
         """
+        text = try_to_utf8(data)
+
+        # Handle remote query
+        if text == "__QUERY_REMOTE__":
+            if not settings.get("enable_remote_commands", False):
+                return
+            def respond():
+                funcs = command_manager.get_remote_functions()
+                for f in funcs:
+                    self.gw.send(f)
+                    time.sleep(1)
+                self.gw.send("$EOF")
+            threading.Thread(target=respond, daemon=True).start()
+            return
+
+        if self.query_active:
+            if text == "$EOF":
+                self.query_active = False
+                msg = f"Remote functions received: {', '.join(self.query_functions)}"
+                print(msg)
+                screen_reader.speak(msg)
+            else:
+                self.query_functions.append(text)
+                self.query_last_received = time.time()
+                print(f"Remote function: {text}")
+                screen_reader.speak(f"Remote function: {text}")
+            return
+
+        if text.startswith("__REMOTE__:"):
+            if not settings.get("enable_remote_commands", False):
+                print("Received remote command, but feature is disabled in settings.")
+                return
+            try:
+                parts = text.split(":")
+                cmd_name = parts[1]
+                args = parts[2] if len(parts) > 2 else ""
+                print(f"Executing Remote Command: {cmd_name} {args}")
+                result = command_manager.execute(cmd_name, *([args] if args else []))
+                print(f"Command Result: {result}")
+                return
+            except (ValueError, IndexError) as e:
+                print(f"Error parsing remote command: {e}")
+                return
+
+        if text.startswith("__RPC__:"):
+            try:
+                parts = text.split(":")
+                protocol = int(parts[1])
+                payload = int(parts[2])
+                print(f"Received Remote Protocol Change: Protocol {protocol}, Payload {payload}")
+                self.gw.protocol = protocol
+                settings.set("protocol", protocol)
+                settings.set("payload_length", payload)
+                self.gw.switchinstance(payload)
+                return
+            except (ValueError, IndexError):
+                pass
+
         if self.sender and self.sender.state != "DONE":
             if self.sender.handle_response(data):
                 return
@@ -54,7 +118,7 @@ class Output:
                     self.receiver.reset()
                 return
 
-        self.data = try_to_utf8(data)
+        self.data = text
         print(self.data)
         screen_reader.speak(self.data)
 
@@ -69,8 +133,13 @@ class Output:
 
 output = Output()
 g=gw.GW(output.data_callback)
+output.gw = g
 output.receiver = FileReceiver(g)
 g.start()
+
+# Initialize API and command manager
+api = AppAPI(g, print)
+command_manager.set_api(api)
 
 # Initialize command validator
 validator = CommandValidator()
@@ -80,19 +149,23 @@ validator = CommandValidator()
 @validator.command("p")
 @validator.integer("protocol_number", minimum=0, maximum=11)
 @validator.integer("payload_length",
-                   required=lambda f: f.protocol_number >= 9,
+                   required=False,
                    minimum=4, maximum=64,
                    default=None)
 def handle_protocol_command(parsed):
-    """Set protocol and payload length. Payload length is optional and must be between 4 and 64. It is only required for protocols 9 to 11 but can be set for all protocols"""
+    """Set protocol and payload length. Payload length is optional and must be between 4 and 64. For protocols 9-11, it defaults to 32 if not specified."""
     g.protocol = parsed.protocol_number
     settings.set("protocol", g.protocol)
     toreturn = f"protocol set to {g.protocol}. "
 
-    if parsed.payload_length is not None:
-        g.switchinstance(parsed.payload_length)
-        settings.set("payload_length", parsed.payload_length)
-        return toreturn + f"payload length {parsed.payload_length}"
+    payload = parsed.payload_length
+    if payload is None and g.protocol >= 9:
+        payload = 32
+
+    if payload is not None:
+        g.switchinstance(payload)
+        settings.set("payload_length", payload)
+        return toreturn + f"payload length {payload}"
     else:
         g.switchinstance(-1)
         settings.set("payload_length", -1)
@@ -221,6 +294,38 @@ def handle_sendfile_command(parsed):
         output.sender = None
         return f"File transfer timed out or failed. State: {sender.state}"
 
+@validator.command("newplugin")
+@validator.string("name")
+def handle_newplugin_command(parsed):
+    """Create a new plugin template. Usage: /newplugin <name>"""
+    success, msg = command_manager.create_plugin_template(parsed.name)
+    return msg
+
+@validator.command("refresh")
+def handle_refresh_command(parsed):
+    """Refresh local plugins list"""
+    command_manager.load_plugins()
+    return "Plugins reloaded."
+
+@validator.command("query")
+def handle_query_command(parsed):
+    """Query remote device for its available commands"""
+    print("Querying remote device for functions...")
+    g.send("__QUERY_REMOTE__")
+    output.query_last_received = time.time()
+    output.query_active = True
+    output.query_functions = []
+    return "Query sent."
+
+@validator.command("remote")
+@validator.string("cmd_name")
+@validator.string("args", default="")
+def handle_remote_command(parsed):
+    """Execute a remote command. Usage: /remote <cmd_name> [args]"""
+    cmd = f"__REMOTE__:{parsed.cmd_name}:{parsed.args}"
+    g.send(cmd)
+    return f"Sent remote command: {parsed.cmd_name} {parsed.args}"
+
 
 def command(cmd):
     """Process a command or message"""
@@ -278,12 +383,19 @@ def main():
                 except queue.Empty:
                     pass
 
-                # Check for receiver timeouts periodically
+                # Check for receiver/query timeouts periodically
                 res = output.receiver.check_timeout()
                 if res == "SENT_NACK":
                     msg = f"Still waiting for chunks of {output.receiver.filename}. Sent NACK."
                     print(msg)
                     screen_reader.speak(msg)
+
+                if output.query_active:
+                    if time.time() - output.query_last_received > 30:
+                        output.query_active = False
+                        msg = f"Remote query timed out. Received: {', '.join(output.query_functions)}"
+                        print(msg)
+                        screen_reader.speak(msg)
 
                 time.sleep(0.1)
 

@@ -15,7 +15,7 @@ class ScreenReader:
     def speak(self, text, interrupt=True):
         if self.speaker:
             try:
-                self.speaker(text, interrupt=interrupt)
+                self.speaker.output(text, interrupt=interrupt)
             except Exception:
                 pass
 

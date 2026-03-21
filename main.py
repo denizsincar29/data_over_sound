@@ -7,7 +7,7 @@ from file_sharing import FileSender, FileReceiver, try_to_utf8
 from command_validator import CommandValidator
 from settings_manager import settings
 from screen_reader_manager import screen_reader
-from command_manager import command_manager
+from command_manager import command_manager, AppAPI
 import sounddevice as sd
 
 class MainFrame(wx.Frame):
@@ -18,6 +18,14 @@ class MainFrame(wx.Frame):
         self.gw = gw.GW(self.output_handler.data_callback)
         self.output_handler.set_gw(self.gw)
         
+        # Update command_manager's API
+        api = AppAPI(self.gw, self.Log)
+        command_manager.set_api(api)
+
+        self.query_active = False
+        self.query_functions = []
+        self.query_last_received = 0
+
         self.InitUI()
         self.gw.start()
         self.SetupHotkeys()
@@ -58,7 +66,7 @@ class MainFrame(wx.Frame):
         panel.SetSizer(vbox)
 
         # Menu Bar
-        menubar = wx.MenuBar()
+        self.menubar = wx.MenuBar()
 
         # File Menu
         fileMenu = wx.Menu()
@@ -69,25 +77,18 @@ class MainFrame(wx.Frame):
         fileMenu.AppendSeparator()
         exitItem = fileMenu.Append(wx.ID_EXIT, 'Exit', 'Exit application')
         self.Bind(wx.EVT_MENU, self.OnExit, exitItem)
-        menubar.Append(fileMenu, '&File')
+        self.menubar.Append(fileMenu, '&File')
 
         # Protocol Menu
         protocolMenu = wx.Menu()
         protocolItem = protocolMenu.Append(wx.ID_ANY, 'Select Protocol...', 'Choose encoding protocol')
         self.Bind(wx.EVT_MENU, self.OnProtocolDialog, protocolItem)
-        menubar.Append(protocolMenu, '&Protocol')
+        self.menubar.Append(protocolMenu, '&Protocol')
 
         # Remote Menu
-        remoteMenu = wx.Menu()
-        self.remote_commands_items = {}
-        for cmd_name in command_manager.commands:
-            item = remoteMenu.Append(wx.ID_ANY, f"Execute {cmd_name}", f"Send {cmd_name} command")
-            self.Bind(wx.EVT_MENU, lambda evt, name=cmd_name: self.OnSendRemoteCommand(name), item)
-
-        remoteMenu.AppendSeparator()
-        hotkeyItem = remoteMenu.Append(wx.ID_ANY, "Assign Hotkeys...", "Assign hotkeys to remote commands")
-        self.Bind(wx.EVT_MENU, self.OnAssignHotkeys, hotkeyItem)
-        menubar.Append(remoteMenu, '&Remote')
+        self.remoteMenu = wx.Menu()
+        self.UpdateRemoteMenu()
+        self.menubar.Append(self.remoteMenu, '&Remote')
 
         # Settings Menu
         settingsMenu = wx.Menu()
@@ -128,10 +129,60 @@ class MainFrame(wx.Frame):
 
         resetItem = settingsMenu.Append(wx.ID_ANY, 'Reset Instance', 'Reset ggwave instance')
         self.Bind(wx.EVT_MENU, self.OnReset, resetItem)
-        menubar.Append(settingsMenu, '&Settings')
+        self.menubar.Append(settingsMenu, '&Settings')
 
-        self.SetMenuBar(menubar)
+        self.SetMenuBar(self.menubar)
         self.Show()
+
+    def UpdateRemoteMenu(self):
+        # Clear existing items
+        for item in self.remoteMenu.GetMenuItems():
+            self.remoteMenu.Remove(item)
+
+        # Dynamic commands
+        for cmd_name in command_manager.commands:
+            item = self.remoteMenu.Append(wx.ID_ANY, f"Execute {cmd_name}", f"Send {cmd_name} command")
+            self.Bind(wx.EVT_MENU, lambda evt, name=cmd_name: self.OnSendRemoteCommand(name), item)
+
+        self.remoteMenu.AppendSeparator()
+
+        createPluginItem = self.remoteMenu.Append(wx.ID_ANY, "Create New Command...", "Create a template for a new plugin")
+        self.Bind(wx.EVT_MENU, self.OnCreatePlugin, createPluginItem)
+
+        refreshItem = self.remoteMenu.Append(wx.ID_ANY, "Refresh Local Commands", "Reload local plugins and refresh list")
+        self.Bind(wx.EVT_MENU, self.OnRefreshLocalCommands, refreshItem)
+
+        queryItem = self.remoteMenu.Append(wx.ID_ANY, "Query Remote Functions", "Ask remote device for its available commands")
+        self.Bind(wx.EVT_MENU, self.OnQueryRemoteFunctions, queryItem)
+
+        self.remoteMenu.AppendSeparator()
+
+        hotkeyItem = self.remoteMenu.Append(wx.ID_ANY, "Assign Hotkeys...", "Assign hotkeys to remote commands")
+        self.Bind(wx.EVT_MENU, self.OnAssignHotkeys, hotkeyItem)
+
+    def OnCreatePlugin(self, event):
+        dlg = wx.TextEntryDialog(self, "Enter name for new plugin folder:", "Create Plugin")
+        if dlg.ShowModal() == wx.ID_OK:
+            name = dlg.GetValue().strip()
+            if name:
+                success, msg = command_manager.create_plugin_template(name)
+                wx.MessageBox(msg, "Create Plugin", wx.OK | (wx.ICON_INFORMATION if success else wx.ICON_ERROR))
+                if success:
+                    self.UpdateRemoteMenu()
+        dlg.Destroy()
+
+    def OnRefreshLocalCommands(self, event):
+        command_manager.load_plugins()
+        self.UpdateRemoteMenu()
+        self.Log("Local commands refreshed.")
+
+    def OnQueryRemoteFunctions(self, event):
+        self.Log("Querying remote device for functions...")
+        self.gw.send("__QUERY_REMOTE__")
+        # Initialize query tracking
+        self.query_last_received = time.time()
+        self.query_active = True
+        self.query_functions = []
 
     def OnSelectProtocol(self, protocol, payload_length=-1):
         if self.remoteProtocolItem.IsChecked():
@@ -222,9 +273,38 @@ class MainFrame(wx.Frame):
         self.protocol_list.SetSelection(self.gw.protocol)
         vbox.Add(self.protocol_list, flag=wx.EXPAND | wx.ALL, border=5)
 
-        vbox.Add(wx.StaticText(dlg, label="Payload Length (4-64, -1 for default):"), flag=wx.ALL, border=5)
-        self.payload_box = wx.TextCtrl(dlg, value=str(settings.get("payload_length", -1)))
+        self.payload_checkbox = wx.CheckBox(dlg, label="Specify payload length")
+        initial_payload = settings.get("payload_length", -1)
+        self.payload_checkbox.SetValue(initial_payload != -1)
+        vbox.Add(self.payload_checkbox, flag=wx.ALL, border=5)
+
+        self.payload_label = wx.StaticText(dlg, label="Payload Length (4-64):")
+        vbox.Add(self.payload_label, flag=wx.LEFT | wx.RIGHT | wx.TOP, border=5)
+        self.payload_box = wx.TextCtrl(dlg, value=str(initial_payload if initial_payload != -1 else 32))
         vbox.Add(self.payload_box, flag=wx.EXPAND | wx.ALL, border=5)
+
+        def UpdateUI(protocol_idx):
+            is_st = protocol_idx >= 9
+            if is_st:
+                self.payload_checkbox.SetValue(True)
+                self.payload_checkbox.Hide()
+                self.payload_label.Show()
+                self.payload_box.Show()
+            else:
+                self.payload_checkbox.Show()
+                if self.payload_checkbox.IsChecked():
+                    self.payload_label.Show()
+                    self.payload_box.Show()
+                else:
+                    self.payload_label.Hide()
+                    self.payload_box.Hide()
+            dlg.Layout()
+            vbox.Fit(dlg)
+
+        self.protocol_list.Bind(wx.EVT_LISTBOX, lambda e: UpdateUI(self.protocol_list.GetSelection()))
+        self.payload_checkbox.Bind(wx.EVT_CHECKBOX, lambda e: UpdateUI(self.protocol_list.GetSelection()))
+
+        UpdateUI(self.protocol_list.GetSelection())
 
         btn_box = wx.BoxSizer(wx.HORIZONTAL)
         ok_btn = wx.Button(dlg, wx.ID_OK)
@@ -239,10 +319,13 @@ class MainFrame(wx.Frame):
         if dlg.ShowModal() == wx.ID_OK:
             protocol = self.protocol_list.GetSelection()
             try:
-                payload = int(self.payload_box.GetValue())
-                if protocol >= 9 and (payload < 4 or payload > 64):
-                    wx.MessageBox("Payload length must be 4-64 for protocols 9-11", "Error", wx.OK | wx.ICON_ERROR)
-                    return
+                if self.payload_checkbox.IsChecked():
+                    payload = int(self.payload_box.GetValue())
+                    if payload < 4 or payload > 64:
+                        wx.MessageBox("Payload length must be 4-64", "Error", wx.OK | wx.ICON_ERROR)
+                        return
+                else:
+                    payload = -1
                 self.OnSelectProtocol(protocol, payload)
             except ValueError:
                 wx.MessageBox("Invalid payload length", "Error", wx.OK | wx.ICON_ERROR)
@@ -311,6 +394,11 @@ class MainFrame(wx.Frame):
         res = self.output_handler.receiver.check_timeout()
         if res == "SENT_NACK":
             self.Log(f"Still waiting for chunks of {self.output_handler.receiver.filename}. Sent NACK.")
+
+        if self.query_active:
+            if time.time() - self.query_last_received > 30:
+                self.query_active = False
+                self.Log(f"Remote query timed out. Received: {', '.join(self.query_functions)}")
 
     def OnOpenReceived(self, event):
         from webbrowser import open as wopen
@@ -439,6 +527,29 @@ class GUIOutputHandler:
     def data_callback(self, data):
         # Handle remote control command
         text = try_to_utf8(data)
+
+        if text == "__QUERY_REMOTE__":
+            if not settings.get("enable_remote_commands", False):
+                return
+            def respond():
+                funcs = command_manager.get_remote_functions()
+                for f in funcs:
+                    self.gw.send(f)
+                    time.sleep(1)
+                self.gw.send("$EOF")
+            threading.Thread(target=respond, daemon=True).start()
+            return
+
+        if self.frame.query_active:
+            if text == "$EOF":
+                self.frame.query_active = False
+                wx.CallAfter(self.frame.Log, f"Remote functions received: {', '.join(self.frame.query_functions)}")
+            else:
+                self.frame.query_functions.append(text)
+                self.frame.query_last_received = time.time()
+                wx.CallAfter(self.frame.Log, f"Remote function: {text}")
+            return
+
         if text.startswith("__REMOTE__:"):
             if not settings.get("enable_remote_commands", False):
                 wx.CallAfter(self.frame.Log, "Received remote command, but feature is disabled in settings.")
