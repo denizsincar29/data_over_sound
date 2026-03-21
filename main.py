@@ -365,7 +365,7 @@ class MainFrame(wx.Frame):
                     device=out_dev,
                     channels=1,
                     callback=context.sinecallback,
-                    samplerate=44100
+                    samplerate=48000
                 ):
                     time.sleep(2)
             except Exception as e:
@@ -378,7 +378,7 @@ class MainFrame(wx.Frame):
                     device=(in_dev, out_dev),
                     channels=1,
                     callback=context.incallback,
-                    samplerate=44100
+                    samplerate=48000
                 ):
                     time.sleep(5)
             except Exception as e:

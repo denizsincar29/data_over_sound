@@ -29,7 +29,16 @@ class FileSender:
         self.state = "IDLE"
 
     def send_handshake(self):
-        handshake = f"{self.filename}|{self.num_chunks}|{self.hash}".encode()
+        # On some protocols (e.g., protocols 9-11), max payload is 64 bytes.
+        # With HANDSHAKE_PREFIX (9) and metadata separators, filenames might be too long.
+        # Let's ensure the total handshake doesn't exceed a reasonable limit (60 bytes total).
+        limit = 60 - len(FileSharingProtocol.HANDSHAKE_PREFIX) - len(str(self.num_chunks)) - len(self.hash) - 2
+        safe_filename = self.filename
+        if len(safe_filename) > limit:
+            name, ext = os.path.splitext(self.filename)
+            safe_filename = name[:limit-len(ext)] + ext
+
+        handshake = f"{safe_filename}|{self.num_chunks}|{self.hash}".encode()
         self.gw.send(FileSharingProtocol.HANDSHAKE_PREFIX + handshake)
         self.state = "WAITING_FOR_READY"
 

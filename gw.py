@@ -124,11 +124,21 @@ class GW:
             data: String or bytes to transmit over audio
         """
         with self._instance_lock:
+            encoded = ggwave.encode(data, protocolId=self.protocol, instance=self.instance)
+            if not encoded:
+                return
+
             wf = np.frombuffer(
-                ggwave.encode(data, protocolId=self.protocol, instance=self.instance),
+                encoded,
                 dtype="float32",
             )
         
+        # Ensure the waveform is a multiple of FRAMES by padding with zeros
+        remainder = len(wf) % FRAMES
+        if remainder > 0:
+            padding = FRAMES - remainder
+            wf = np.concatenate([wf, np.zeros(padding, dtype="float32")])
+
         # Split audio into chunks and queue for transmission
         for i in range(0, len(wf), FRAMES):
             self.sendqueue.put(wf[i : i + FRAMES])

@@ -321,6 +321,9 @@ def handle_remote_command(parsed):
 
 def command(cmd):
     """Process a command or message"""
+    if not g:
+        return "Audio system not initialized"
+
     if not cmd.startswith("/"):
         g.send(cmd)
         return "sending"
