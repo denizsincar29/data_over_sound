@@ -4,8 +4,7 @@ version = "0.1.0"
 description = "This is a program to send small pieces of data using sound waves between airgaped devices"
 authors = [{name = "deniz", email = "deniz@r1oaz.ru"}]
 readme = "README.md"
-# Pinned to <3.12 due to ggwave build issues on newer Python versions
-requires-python = ">=3.10,<3.12"
+requires-python = ">=3.10"
 dependencies = [
     "numpy>=2.1.3",
     "ggwave>=0.4.2",
@@ -17,6 +16,9 @@ dependencies = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["/"]
+
+[tool.uv]
+extra-build-dependencies = { ggwave = ["Cython"] }
 
 [build-system]
 requires = ["hatchling"]
