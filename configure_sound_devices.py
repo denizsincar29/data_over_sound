@@ -8,9 +8,10 @@ from os.path import exists
 import json
 import numpy as np
 import sounddevice as sd
+from settings_manager import settings
 
 # Default device configuration
-devs = [-1, -1]
+devs = settings.get("devices", [-1, -1])
 
 # Audio parameters for device testing
 _SAMPLERATE = 44100
@@ -123,33 +124,17 @@ def test():
     global devs
     devs[1] = testoutput()
     devs[0] = testinput(devs[1])
-    with open("devices.json", "w", encoding="UTF-8") as f:
-        json.dump(devs, f)
+    settings.set("devices", devs)
 
 
 def load_devices():
-    """Load device configuration from file with validation."""
+    """Load device configuration from settings."""
     global devs
-    try:
-        with open("devices.json", encoding="UTF-8") as f:
-            loaded_devs = json.load(f)
-            
-        # Validate format
-        if not isinstance(loaded_devs, list) or len(loaded_devs) != 2:
-            raise ValueError("Invalid devices.json format")
-        if not all(isinstance(d, int) for d in loaded_devs):
-            raise ValueError("Device indices must be integers")
-            
-        devs = loaded_devs
-    except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
-        print(f"Error loading devices.json: {e}")
-        print("Running device configuration...")
-        test()
+    devs = settings.get("devices", [-1, -1])
 
 
 # Only run device configuration if this module is imported
 # (not when testing or importing for other purposes)
-if not exists("devices.json"):
-    test()
-else:
+# But only if devices are not already set
+if devs != [-1, -1]:
     load_devices()

@@ -13,6 +13,8 @@ import time
 from sys import exit
 from command_validator import CommandValidator, ValidationError
 from file_sharing import FileSender, FileReceiver, FileSharingProtocol, try_to_utf8
+from settings_manager import settings
+from screen_reader_manager import screen_reader
 
 
 class Output:
@@ -42,14 +44,19 @@ class Output:
             res = self.receiver.handle_data(data)
             if res:
                 if res == "HANDSHAKE_RECEIVED":
-                    print(f"Receiving file: {self.receiver.filename} ({self.receiver.num_chunks} chunks)")
+                    msg = f"Receiving file: {self.receiver.filename} ({self.receiver.num_chunks} chunks)"
+                    print(msg)
+                    screen_reader.speak(msg)
                 elif res == "SUCCESS":
-                    print(f"File received successfully: {self.receiver.filename}")
+                    msg = f"File received successfully: {self.receiver.filename}"
+                    print(msg)
+                    screen_reader.speak(msg)
                     self.receiver.reset()
                 return
 
         self.data = try_to_utf8(data)
         print(self.data)
+        screen_reader.speak(self.data)
 
     def parse(self):
         """
@@ -79,13 +86,16 @@ validator = CommandValidator()
 def handle_protocol_command(parsed):
     """Set protocol and payload length. Payload length is optional and must be between 4 and 64. It is only required for protocols 9 to 11 but can be set for all protocols"""
     g.protocol = parsed.protocol_number
+    settings.set("protocol", g.protocol)
     toreturn = f"protocol set to {g.protocol}. "
 
     if parsed.payload_length is not None:
         g.switchinstance(parsed.payload_length)
+        settings.set("payload_length", parsed.payload_length)
         return toreturn + f"payload length {parsed.payload_length}"
     else:
         g.switchinstance(-1)
+        settings.set("payload_length", -1)
         return toreturn
 
 
@@ -153,12 +163,7 @@ def handle_exit_command(parsed):
 @validator.command("device")
 def handle_device_command(parsed):
     """Test sound devices"""
-    try:
-        os.remove("devices.json")
-    except FileNotFoundError:
-        pass  # File already deleted, no problem
-    except OSError as e:
-        return f"Error removing devices.json: {e}"
+    settings.set("devices", [-1, -1])
     input("!Press enter and restart the program. It will start with the device test prompt.")
     g.stop()
     exit()
@@ -232,6 +237,10 @@ def command(cmd):
 
 def main():
     """Main application loop."""
+    import configure_sound_devices
+    if configure_sound_devices.devs == [-1, -1]:
+        configure_sound_devices.test()
+
     print("Welcome to data_over_sound")
     print("Type /help for help")
     print("Enter your message or command:")
@@ -272,7 +281,9 @@ def main():
                 # Check for receiver timeouts periodically
                 res = output.receiver.check_timeout()
                 if res == "SENT_NACK":
-                    print(f"Still waiting for chunks of {output.receiver.filename}. Sent NACK.")
+                    msg = f"Still waiting for chunks of {output.receiver.filename}. Sent NACK."
+                    print(msg)
+                    screen_reader.speak(msg)
 
                 time.sleep(0.1)
 

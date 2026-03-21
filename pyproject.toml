@@ -12,6 +12,7 @@ dependencies = [
     "cython",
     "rust-enum",
     "wxpython",
+    "accessible_output3",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -19,6 +20,7 @@ packages = ["/"]
 
 [tool.uv]
 extra-build-dependencies = { ggwave = ["Cython"] }
+extra-build-variables = { ggwave = { GGWAVE_USE_CYTHON = "1" } }
 
 [build-system]
 requires = ["hatchling"]

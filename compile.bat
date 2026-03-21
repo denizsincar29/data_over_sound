@@ -30,6 +30,7 @@ uv run pyinstaller --noconfirm --onedir --windowed ^
     --collect-all sounddevice ^
     --hidden-import wx ^
     --hidden-import numpy ^
+    --hidden-import accessible_output3 ^
     main.py
 
 if errorlevel 1 (
