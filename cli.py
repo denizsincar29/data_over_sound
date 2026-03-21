@@ -19,6 +19,14 @@ from screen_reader_manager import screen_reader
 from command_manager import command_manager, AppAPI
 
 
+def delayed_send(gw_instance, data, protocol=None, delay=0.5):
+    """Sends data after a delay in a separate thread to avoid blocking."""
+    def _send():
+        time.sleep(delay)
+        gw_instance.send(data, protocol=protocol)
+    threading.Thread(target=_send, daemon=True).start()
+
+
 class Output:
     """
     Handler for received data output.
@@ -49,6 +57,7 @@ class Output:
             if not settings.get("enable_remote_commands", False):
                 return
             def respond():
+                time.sleep(0.5) # SAR delay
                 funcs = command_manager.get_remote_functions()
                 for f in funcs:
                     self.gw.send(f)
@@ -101,21 +110,42 @@ class Output:
                 pass
 
         if self.sender and self.sender.state != "DONE":
-            if self.sender.handle_response(data):
+            action, details = self.sender.handle_response(data)
+            if action == "START_SENDING":
+                def send_all():
+                    time.sleep(0.5) # SAR delay
+                    for i in range(self.sender.num_chunks):
+                        self.gw.send(self.sender.get_chunk_data(i), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                    self.gw.send(self.sender.get_eof_data(), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                threading.Thread(target=send_all, daemon=True).start()
+                return
+            elif action == "RESEND_CHUNKS":
+                def resend():
+                    time.sleep(0.5) # SAR delay
+                    for i in details:
+                        self.gw.send(self.sender.get_chunk_data(i), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                    self.gw.send(self.sender.get_eof_data(), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                threading.Thread(target=resend, daemon=True).start()
+                return
+            elif action == "COMPLETED":
                 return
 
         if self.receiver:
-            res = self.receiver.handle_data(data)
-            if res:
-                if res == "HANDSHAKE_RECEIVED":
+            status, details = self.receiver.handle_data(data)
+            if status:
+                if status == "SEND_READY":
                     msg = f"Receiving file: {self.receiver.filename} ({self.receiver.num_chunks} chunks)"
                     print(msg)
                     screen_reader.speak(msg)
-                elif res == "SUCCESS":
+                    delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + details, protocol=FileSharingProtocol.FILE_PROTOCOL)
+                elif status == "SEND_SUCCESS":
                     msg = f"File received successfully: {self.receiver.filename}"
                     print(msg)
                     screen_reader.speak(msg)
-                    self.receiver.reset()
+                    delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + FileSharingProtocol.SUCCESS_SIGNAL, protocol=FileSharingProtocol.FILE_PROTOCOL)
+                elif status == "SEND_NACK":
+                    nack_msg = FileSharingProtocol.NACK_PREFIX + ",".join(map(str, details)).encode()
+                    delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + nack_msg, protocol=FileSharingProtocol.FILE_PROTOCOL)
                 return
 
         self.data = text
@@ -258,8 +288,17 @@ def handle_sendfile_command(parsed):
 
     sender = FileSender(g, parsed.filepath)
     output.sender = sender
+
+    # Protocol check: Send RPC if not already on the file sending protocol
+    if g.protocol != FileSharingProtocol.FILE_PROTOCOL:
+        print(f"Switching remote protocol to {FileSharingProtocol.FILE_PROTOCOL}...")
+        cmd = f"__RPC__:{FileSharingProtocol.FILE_PROTOCOL}:-1"
+        g.send(cmd)
+        time.sleep(0.5) # SAR delay
+
     print(f"Starting handshake for {sender.filename}...")
-    sender.send_handshake()
+    g.send(sender.get_handshake_data(), protocol=FileSharingProtocol.FILE_PROTOCOL)
+    sender.state = "WAITING_FOR_READY"
 
     # Wait for ready signal
     start_time = time.time()
@@ -271,13 +310,12 @@ def handle_sendfile_command(parsed):
         return "Handshake timeout (30s). Make sure the receiver is listening."
 
     print("Handshake successful, sending chunks...")
-    # send_all_chunks was called in handle_response when READY was received
+    # send_all_chunks was handled in data_callback
 
     # Wait for completion or retransmission requests
     start_time = time.time()
-    while sender.state == "WAITING_FOR_ACK" and time.time() - start_time < 60: # 60s for file transfer
+    while sender.state != "DONE" and time.time() - start_time < 120: # Increased timeout for larger files
         time.sleep(0.1)
-        # reset timer if we are still active? No, let's keep it simple for now.
 
     if sender.state == "DONE":
         output.sender = None
@@ -390,11 +428,21 @@ def main():
                     pass
 
                 # Check for receiver/query timeouts periodically
-                res = output.receiver.check_timeout()
-                if res == "SENT_NACK":
-                    msg = f"Still waiting for chunks of {output.receiver.filename}. Sent NACK."
-                    print(msg)
-                    screen_reader.speak(msg)
+                status, details = output.receiver.check_timeout()
+                if status:
+                    if status == "SEND_READY":
+                        msg = f"Resending READY for {output.receiver.filename}..."
+                        print(msg)
+                        delayed_send(g, FileSharingProtocol.CONTROL_BYTE + details, protocol=FileSharingProtocol.FILE_PROTOCOL)
+                    elif status == "SEND_NACK":
+                        msg = f"Still waiting for chunks of {output.receiver.filename}. Sent NACK."
+                        print(msg)
+                        screen_reader.speak(msg)
+                        nack_msg = FileSharingProtocol.NACK_PREFIX + ",".join(map(str, details)).encode()
+                        delayed_send(g, FileSharingProtocol.CONTROL_BYTE + nack_msg, protocol=FileSharingProtocol.FILE_PROTOCOL)
+                    elif status == "ABORT":
+                        print(details)
+                        screen_reader.speak(details)
 
                 if output.query_active:
                     if time.time() - output.query_last_received > 30:

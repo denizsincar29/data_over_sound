@@ -32,33 +32,38 @@ class TestFileSharing(unittest.TestCase):
         receiver = FileReceiver(self.gw_receiver)
 
         # 1. Handshake
-        sender.send_handshake()
-        handshake = self.gw_sender.sent_data.pop(0)
-        res = receiver.handle_data(handshake)
-        self.assertEqual(res, "HANDSHAKE_RECEIVED")
+        handshake = sender.get_handshake_data()
+        sender.state = "WAITING_FOR_READY"
+        status, details = receiver.handle_data(handshake)
+        self.assertEqual(status, "SEND_READY")
+        self.assertEqual(details, FileSharingProtocol.READY_SIGNAL)
         self.assertEqual(receiver.state, "RECEIVING")
 
         # 2. Ready Signal
-        ready = self.gw_receiver.sent_data.pop(0)
-        self.assertEqual(ready, FileSharingProtocol.READY_SIGNAL)
-        res = sender.handle_response(ready)
-        self.assertTrue(res)
-        self.assertEqual(sender.state, "WAITING_FOR_ACK")
+        ready = FileSharingProtocol.CONTROL_BYTE + details
+        action, details = sender.handle_response(ready)
+        self.assertEqual(action, "START_SENDING")
+        self.assertEqual(sender.state, "SENDING_CHUNKS")
 
         # 3. Chunks
-        chunks_sent = self.gw_sender.sent_data[:]
-        self.gw_sender.sent_data = []
-        for chunk in chunks_sent:
-            res = receiver.handle_data(chunk)
-            # res will be CHUNK_RECEIVED or SUCCESS
+        for i in range(sender.num_chunks):
+            chunk = sender.get_chunk_data(i)
+            status, details = receiver.handle_data(chunk)
+            if i == sender.num_chunks - 1:
+                self.assertEqual(status, "SEND_SUCCESS")
+            else:
+                self.assertEqual(status, "CHUNK_RECEIVED")
 
+        # 4. EOF (ignored because already DONE)
+        eof = sender.get_eof_data()
+        status, details = receiver.handle_data(eof)
+        self.assertIsNone(status)
         self.assertEqual(receiver.state, "DONE")
 
-        # 4. Success Signal
-        success = self.gw_receiver.sent_data.pop(0)
-        self.assertEqual(success, FileSharingProtocol.SUCCESS_SIGNAL)
-        res = sender.handle_response(success)
-        self.assertEqual(res, "COMPLETED")
+        # 5. Success Signal
+        success = FileSharingProtocol.CONTROL_BYTE + FileSharingProtocol.SUCCESS_SIGNAL
+        action, details = sender.handle_response(success)
+        self.assertEqual(action, "COMPLETED")
         self.assertEqual(sender.state, "DONE")
 
         # Verify file content
@@ -76,35 +81,59 @@ class TestFileSharing(unittest.TestCase):
         receiver = FileReceiver(self.gw_receiver)
 
         # Handshake and Ready
-        sender.send_handshake()
-        receiver.handle_data(self.gw_sender.sent_data.pop(0))
-        sender.handle_response(self.gw_receiver.sent_data.pop(0))
-
-        # Chunks are now in self.gw_sender.sent_data
-        self.assertEqual(len(self.gw_sender.sent_data), 2)
-        chunk0 = self.gw_sender.sent_data.pop(0)
-        chunk1 = self.gw_sender.sent_data.pop(0)
+        handshake = sender.get_handshake_data()
+        sender.state = "WAITING_FOR_READY"
+        status, ready_data = receiver.handle_data(handshake)
+        sender.handle_response(FileSharingProtocol.CONTROL_BYTE + ready_data)
 
         # Receiver gets only chunk 0
+        chunk0 = sender.get_chunk_data(0)
         receiver.handle_data(chunk0)
         self.assertEqual(len(receiver.received_chunks), 1)
         self.assertEqual(receiver.state, "RECEIVING")
 
-        # Manually trigger NACK for missing chunks
-        receiver.request_missing()
-        nack = self.gw_receiver.sent_data.pop(0)
-        self.assertTrue(nack.startswith(FileSharingProtocol.NACK_PREFIX))
-        self.assertIn(b"1", nack)
+        # Receiver gets EOF, triggering NACK
+        eof = sender.get_eof_data()
+        status, details = receiver.handle_data(eof)
+        self.assertEqual(status, "SEND_NACK")
+        self.assertEqual(details, [1])
 
-        # Sender handles NACK and resends chunk 1
-        res = sender.handle_response(nack)
-        self.assertTrue(res)
+        # Sender handles NACK
+        nack = FileSharingProtocol.CONTROL_BYTE + FileSharingProtocol.NACK_PREFIX + b"1"
+        action, details = sender.handle_response(nack)
+        self.assertEqual(action, "RESEND_CHUNKS")
+        self.assertEqual(details, [1])
 
         # Receiver gets retransmitted chunk 1
-        re_chunk1 = self.gw_sender.sent_data.pop(0)
-        self.assertEqual(re_chunk1, chunk1)
-        res = receiver.handle_data(re_chunk1)
-        self.assertEqual(res, "SUCCESS")
+        re_chunk1 = sender.get_chunk_data(1)
+        status, details = receiver.handle_data(re_chunk1)
+        self.assertEqual(status, "SEND_SUCCESS")
+
+    def test_timeout_retry_ready(self):
+        sender = FileSender(self.gw_sender, self.test_file)
+        receiver = FileReceiver(self.gw_receiver)
+
+        # Handshake
+        receiver.handle_data(sender.get_handshake_data())
+        self.assertEqual(receiver.ready_sent_count, 1)
+
+        # Mock timeout
+        receiver.last_activity -= 20
+        status, details = receiver.check_timeout()
+        self.assertEqual(status, "SEND_READY")
+        self.assertEqual(receiver.ready_sent_count, 2)
+
+        # Mock timeout again
+        receiver.last_activity -= 20
+        status, details = receiver.check_timeout()
+        self.assertEqual(status, "SEND_READY")
+        self.assertEqual(receiver.ready_sent_count, 3)
+
+        # Mock timeout again -> Abort
+        receiver.last_activity -= 20
+        status, details = receiver.check_timeout()
+        self.assertEqual(status, "ABORT")
+        self.assertEqual(receiver.state, "IDLE")
 
 if __name__ == "__main__":
     unittest.main()

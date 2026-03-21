@@ -3,12 +3,19 @@ import gw
 import os
 import time
 import threading
-from file_sharing import FileSender, FileReceiver, try_to_utf8
+from file_sharing import FileSender, FileReceiver, FileSharingProtocol, try_to_utf8
 from command_validator import CommandValidator
 from settings_manager import settings
 from screen_reader_manager import screen_reader
 from command_manager import command_manager, AppAPI
 import sounddevice as sd
+
+def delayed_send(gw_instance, data, protocol=None, delay=0.5):
+    """Sends data after a delay in a separate thread to avoid blocking."""
+    def _send():
+        time.sleep(delay)
+        gw_instance.send(data, protocol=protocol)
+    threading.Thread(target=_send, daemon=True).start()
 
 class MainFrame(wx.Frame):
     def __init__(self, parent, title):
@@ -397,9 +404,17 @@ class MainFrame(wx.Frame):
         self.Log("Instance reset")
 
     def OnTimer(self, event):
-        res = self.output_handler.receiver.check_timeout()
-        if res == "SENT_NACK":
-            self.Log(f"Still waiting for chunks of {self.output_handler.receiver.filename}. Sent NACK.")
+        status, details = self.output_handler.receiver.check_timeout()
+        if status:
+            if status == "SEND_READY":
+                self.Log(f"Resending READY for {self.output_handler.receiver.filename}...")
+                delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + details, protocol=FileSharingProtocol.FILE_PROTOCOL)
+            elif status == "SEND_NACK":
+                self.Log(f"Still waiting for chunks of {self.output_handler.receiver.filename}. Sent NACK.")
+                nack_msg = FileSharingProtocol.NACK_PREFIX + ",".join(map(str, details)).encode()
+                delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + nack_msg, protocol=FileSharingProtocol.FILE_PROTOCOL)
+            elif status == "ABORT":
+                self.Log(details)
 
         if self.query_active:
             if time.time() - self.query_last_received > 30:
@@ -451,8 +466,17 @@ class MainFrame(wx.Frame):
     def _SendFileThread(self, path):
         sender = FileSender(self.gw, path)
         self.output_handler.sender = sender
+
+        # Protocol check
+        if self.gw.protocol != FileSharingProtocol.FILE_PROTOCOL:
+            wx.CallAfter(self.Log, f"Switching remote protocol to {FileSharingProtocol.FILE_PROTOCOL}...")
+            cmd = f"__RPC__:{FileSharingProtocol.FILE_PROTOCOL}:-1"
+            self.gw.send(cmd)
+            time.sleep(0.5) # SAR delay
+
         wx.CallAfter(self.Log, f"Starting handshake for {sender.filename}...")
-        sender.send_handshake()
+        self.gw.send(sender.get_handshake_data(), protocol=FileSharingProtocol.FILE_PROTOCOL)
+        sender.state = "WAITING_FOR_READY"
 
         # Wait for ready signal (30s timeout)
         start_time = time.time()
@@ -468,7 +492,7 @@ class MainFrame(wx.Frame):
 
         # Wait for completion or retransmission requests
         start_time = time.time()
-        while sender.state == "WAITING_FOR_ACK" and time.time() - start_time < 60:
+        while sender.state != "DONE" and time.time() - start_time < 120:
             time.sleep(0.1)
 
         if sender.state == "DONE":
@@ -539,6 +563,7 @@ class GUIOutputHandler:
             if not settings.get("enable_remote_commands", False):
                 return
             def respond():
+                time.sleep(0.5) # SAR delay
                 funcs = command_manager.get_remote_functions()
                 for f in funcs:
                     self.gw.send(f)
@@ -587,22 +612,47 @@ class GUIOutputHandler:
 
         # Handle sender state
         if self.sender and self.sender.state != "DONE":
-            if self.sender.handle_response(data):
+            action, details = self.sender.handle_response(data)
+            if action == "START_SENDING":
+                def send_all():
+                    time.sleep(0.5) # SAR delay
+                    for i in range(self.sender.num_chunks):
+                        self.gw.send(self.sender.get_chunk_data(i), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                    self.gw.send(self.sender.get_eof_data(), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                threading.Thread(target=send_all, daemon=True).start()
+                return
+            elif action == "RESEND_CHUNKS":
+                def resend():
+                    time.sleep(0.5) # SAR delay
+                    for i in details:
+                        self.gw.send(self.sender.get_chunk_data(i), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                    self.gw.send(self.sender.get_eof_data(), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                threading.Thread(target=resend, daemon=True).start()
+                return
+            elif action == "COMPLETED":
                 return
 
         # Handle receiver state
         if self.receiver:
-            res = self.receiver.handle_data(data)
-            if res:
-                if res == "HANDSHAKE_RECEIVED":
+            status, details = self.receiver.handle_data(data)
+            if status:
+                if status == "HANDSHAKE_RECEIVED": # This is not a status from FileReceiver anymore
+                    # Actually I kept it in handle_data but named it SEND_READY
+                    pass
+                if status == "SEND_READY":
                     wx.CallAfter(self.frame.Log, f"Receiving file: {self.receiver.filename} ({self.receiver.num_chunks} chunks)")
                     wx.CallAfter(self.frame.UpdateProgress, 0, self.receiver.num_chunks)
-                elif res == "CHUNK_RECEIVED":
+                    delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + details, protocol=FileSharingProtocol.FILE_PROTOCOL)
+                elif status == "CHUNK_RECEIVED":
                     wx.CallAfter(self.frame.UpdateProgress, len(self.receiver.received_chunks), self.receiver.num_chunks)
-                elif res == "SUCCESS":
+                elif status == "SEND_SUCCESS":
                     wx.CallAfter(self.frame.Log, f"File received successfully: {self.receiver.filename}")
                     wx.CallAfter(self.frame.UpdateProgress, self.receiver.num_chunks, self.receiver.num_chunks)
+                    delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + FileSharingProtocol.SUCCESS_SIGNAL, protocol=FileSharingProtocol.FILE_PROTOCOL)
                     self.receiver.reset()
+                elif status == "SEND_NACK":
+                    nack_msg = FileSharingProtocol.NACK_PREFIX + ",".join(map(str, details)).encode()
+                    delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + nack_msg, protocol=FileSharingProtocol.FILE_PROTOCOL)
                 return
 
         text = try_to_utf8(data)
