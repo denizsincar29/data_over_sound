@@ -1,8 +1,10 @@
 import os
 import hashlib
 import time
+from typing import Optional, Tuple, List, Dict, Any
 
 class FileSharingProtocol:
+    """Constants and utility methods for the file sharing protocol."""
     HANDSHAKE_PREFIX = b"FS_START:"
     READY_SIGNAL = b"FS_READY"
     SUCCESS_SIGNAL = b"FS_SUCCESS"
@@ -19,11 +21,13 @@ class FileSharingProtocol:
     CHUNK_SIZE = 137  # 1 byte prefix + 2 bytes index + 137 bytes data = 140 bytes
 
     @staticmethod
-    def get_hash(data):
+    def get_hash(data: bytes) -> str:
+        """Calculate MD5 hash of data."""
         return hashlib.md5(data).hexdigest()
 
 class FileSender:
-    def __init__(self, gw, filepath):
+    """Handles the sending side of the file sharing protocol."""
+    def __init__(self, gw: Any, filepath: str):
         self.gw = gw
         self.filepath = filepath
         self.filename = os.path.basename(filepath)
@@ -36,7 +40,8 @@ class FileSender:
         self.num_chunks = len(self.chunks)
         self.state = "IDLE"
 
-    def get_handshake_data(self):
+    def get_handshake_data(self) -> bytes:
+        """Generate handshake data with control prefix."""
         # Even with variable length, we should limit filename to keep handshake under 140 bytes.
         limit = 138 - len(FileSharingProtocol.HANDSHAKE_PREFIX) - len(str(self.num_chunks)) - len(self.hash) - 2
         safe_filename = self.filename
@@ -47,14 +52,15 @@ class FileSender:
         handshake = f"{safe_filename}|{self.num_chunks}|{self.hash}".encode()
         return FileSharingProtocol.CONTROL_BYTE + FileSharingProtocol.HANDSHAKE_PREFIX + handshake
 
-    def handle_response(self, data):
+    def handle_response(self, data: bytes) -> Tuple[Optional[str], Any]:
         """
-        Processes received data and returns a tuple (action, details)
+        Processes received data and returns a tuple (action, details).
+
         Actions:
-            - 'START_SENDING': Handshake accepted, start sending chunks
-            - 'RESEND_CHUNKS': NACK received, details is list of indices
-            - 'COMPLETED': Success signal received
-            - None: No action needed or irrelevant data
+            - 'START_SENDING': Handshake accepted, start sending chunks.
+            - 'RESEND_CHUNKS': NACK received, details is list of indices.
+            - 'COMPLETED': Success signal received.
+            - None: No action needed or irrelevant data.
         """
         if not data.startswith(FileSharingProtocol.CONTROL_BYTE):
             return (None, None)
@@ -79,42 +85,46 @@ class FileSender:
                     return (None, None)
         return (None, None)
 
-    def get_chunk_data(self, index):
+    def get_chunk_data(self, index: int) -> bytes:
+        """Generate chunk data with data prefix and index header."""
         header = index.to_bytes(2, byteorder='big')
         return FileSharingProtocol.DATA_BYTE + header + self.chunks[index]
 
-    def get_eof_data(self):
+    def get_eof_data(self) -> bytes:
+        """Generate EOF signal with control prefix."""
         return FileSharingProtocol.CONTROL_BYTE + FileSharingProtocol.EOF_SIGNAL
 
 class FileReceiver:
-    def __init__(self, gw, save_dir="files"):
+    """Handles the receiving side of the file sharing protocol."""
+    def __init__(self, gw: Any, save_dir: str = "files"):
         self.gw = gw
         self.save_dir = save_dir
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         self.reset()
 
-    def reset(self):
+    def reset(self) -> None:
+        """Reset the receiver state."""
         self.filename = None
         self.num_chunks = 0
         self.expected_hash = None
-        self.received_chunks = {}
+        self.received_chunks: Dict[int, bytes] = {}
         self.state = "IDLE"
-        self.last_activity = 0
+        self.last_activity = 0.0
         self.ready_sent_count = 0
         self.eof_received = False
 
-    def handle_data(self, data):
+    def handle_data(self, data: bytes) -> Tuple[Optional[str], Any]:
         """
-        Processes received data and returns a tuple (status, details)
+        Processes received data and returns a tuple (status, details).
+
         Statuses:
-            - 'HANDSHAKE_RECEIVED': New file transfer initiated
-            - 'CHUNK_RECEIVED': A file chunk was received
-            - 'SUCCESS': File transfer completed successfully
-            - 'ERROR': Something went wrong
-            - 'SEND_READY': Need to send READY signal
-            - 'SEND_NACK': Need to send NACK for missing chunks
-            - None: No status change
+            - 'SEND_READY': Need to send READY signal.
+            - 'CHUNK_RECEIVED': A file chunk was received.
+            - 'SEND_SUCCESS': File transfer completed successfully.
+            - 'SEND_NACK': Need to send NACK for missing chunks.
+            - 'ERROR': Something went wrong.
+            - None: No status change.
         """
         if data.startswith(FileSharingProtocol.CONTROL_BYTE):
             control_data = data[1:]
@@ -131,7 +141,7 @@ class FileReceiver:
                     self.eof_received = False
                     return ("SEND_READY", FileSharingProtocol.READY_SIGNAL)
                 except Exception:
-                    return ("ERROR", "Invalid handshake")
+                    return ("ERROR", "Invalid Handshake.")
 
             if self.state == "RECEIVING":
                 if control_data == FileSharingProtocol.EOF_SIGNAL:
@@ -158,14 +168,15 @@ class FileReceiver:
                         pass
         return (None, None)
 
-    def check_timeout(self):
+    def check_timeout(self) -> Tuple[Optional[str], Any]:
         """
         Checks for timeouts and returns (action, details) if something needs to be sent.
+
         Actions:
-            - 'SEND_READY': Resend READY signal
-            - 'SEND_NACK': Send NACK for missing chunks
-            - 'ABORT': Too many retries, give up
-            - None: No action
+            - 'SEND_READY': Resend READY signal.
+            - 'SEND_NACK': Send NACK for missing chunks.
+            - 'ABORT': Too many retries, give up.
+            - None: No action.
         """
         if self.state == "RECEIVING" and self.num_chunks > 0:
             timeout = 15
@@ -176,7 +187,7 @@ class FileReceiver:
                         self.last_activity = time.time()
                         return ("SEND_READY", FileSharingProtocol.READY_SIGNAL)
                     else:
-                        msg = f"Handshake timeout for {self.filename} after 3 attempts"
+                        msg = f"Handshake timeout for {self.filename} after 3 attempts."
                         self.reset()
                         return ("ABORT", msg)
                 else:
@@ -187,7 +198,8 @@ class FileReceiver:
                         return ("SEND_NACK", missing)
         return (None, None)
 
-    def check_completion(self):
+    def check_completion(self) -> Tuple[Optional[str], Any]:
+        """Check if all chunks are received and match hash."""
         if len(self.received_chunks) == self.num_chunks:
             all_data = b""
             for i in range(self.num_chunks):
@@ -203,7 +215,7 @@ class FileReceiver:
                 self.state = "DONE"
                 return ("SEND_SUCCESS", self.filename)
             else:
-                return ("ERROR", "Hash mismatch")
+                return ("ERROR", "Hash Mismatch.")
         elif self.eof_received:
             # EOF heard but chunks missing, trigger NACK immediately
             missing = [i for i in range(self.num_chunks) if i not in self.received_chunks]
@@ -211,15 +223,15 @@ class FileReceiver:
 
         return (None, None)
 
-def try_to_utf8(val):
+def try_to_utf8(val: bytes) -> str:
     """
     Try to decode bytes to UTF-8 string.
 
     Args:
-        val: Bytes to decode
+        val: Bytes to decode.
 
     Returns:
-        Decoded string or original value if decoding fails
+        Decoded string or original value if decoding fails.
     """
     try:
         return val.decode("UTF-8").replace("\x00", "")

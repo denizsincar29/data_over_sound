@@ -135,5 +135,10 @@ class TestFileSharing(unittest.TestCase):
         self.assertEqual(status, "ABORT")
         self.assertEqual(receiver.state, "IDLE")
 
+    def test_protocol_switch_logic(self):
+        # This test checks the logic for protocol switching before handshake
+        # Since the switch is in cli.py/main.py, we can only verify the state expectations here
+        self.assertEqual(FileSharingProtocol.FILE_PROTOCOL, 2)
+
 if __name__ == "__main__":
     unittest.main()
