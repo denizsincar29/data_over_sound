@@ -137,7 +137,9 @@ class FileReceiver:
         if not missing:
             actual_hash = FileSharingProtocol.get_hash(all_data)
             if actual_hash == self.expected_hash:
-                filepath = os.path.join(self.save_dir, self.filename)
+                # Sanitize filename to prevent path traversal
+                safe_filename = os.path.basename(self.filename)
+                filepath = os.path.join(self.save_dir, safe_filename)
                 with open(filepath, "wb") as f:
                     f.write(all_data)
                 self.gw.send(FileSharingProtocol.SUCCESS_SIGNAL)

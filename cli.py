@@ -236,40 +236,45 @@ def main():
     print("Type /help for help")
     print("Enter your message or command:")
 
+    import threading
+    import queue
+
+    input_queue = queue.Queue()
+
+    def input_thread():
+        while True:
+            try:
+                cmd = input()
+                input_queue.put(cmd)
+            except EOFError:
+                input_queue.put(None)
+                break
+            except Exception:
+                break
+
+    t = threading.Thread(target=input_thread, daemon=True)
+    t.start()
+
     try:
         while True:
             try:
-                # Use small timeout for input to check for receiver timeouts
-                # select.select on sys.stdin works on Unix but not on Windows.
-                # To be portable, we use a more cross-platform approach if possible,
-                # but since we're in a single-threaded loop, we'll try/except for now.
-                import select
-                import sys
-
-                readable = []
+                # Process inputs from queue without blocking
                 try:
-                    readable, _, _ = select.select([sys.stdin], [], [], 0.1)
-                except (ValueError, select.error):
-                    # On Windows select on stdin might fail.
-                    # Fallback to a blocking input if we have to,
-                    # or handle it differently if it's a known non-unix environment.
-                    cmd = input()
+                    cmd = input_queue.get_nowait()
+                    if cmd is None: # EOF
+                        break
                     result = command(cmd)
                     if result:
                         print(result)
-                    readable = [] # Already handled
+                except queue.Empty:
+                    pass
 
-                if readable:
-                    cmd = sys.stdin.readline().strip()
-                    if cmd:
-                        result = command(cmd)
-                        if result:
-                            print(result)
-
-                # Check for receiver timeouts
+                # Check for receiver timeouts periodically
                 res = output.receiver.check_timeout()
                 if res == "SENT_NACK":
                     print(f"Still waiting for chunks of {output.receiver.filename}. Sent NACK.")
+
+                time.sleep(0.1)
 
             except EOFError:
                 # End of input stream
