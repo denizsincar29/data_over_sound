@@ -4,14 +4,18 @@ version = "0.1.0"
 description = "This is a program to send small pieces of data using sound waves between airgaped devices"
 authors = [{name = "deniz", email = "deniz@r1oaz.ru"}]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.12"
 dependencies = [
     "numpy>=2.1.3",
     "ggwave>=0.4.2",
     "sounddevice",
     "cython",
     "rust-enum",
+    "wxpython",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["/"]
 
 [build-system]
 requires = ["hatchling"]
