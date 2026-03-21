@@ -8,6 +8,7 @@ from command_validator import CommandValidator
 from settings_manager import settings
 from screen_reader_manager import screen_reader
 from command_manager import command_manager
+import sounddevice as sd
 
 class MainFrame(wx.Frame):
     def __init__(self, parent, title):

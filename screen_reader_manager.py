@@ -1,4 +1,4 @@
-from accessible_output3 import speech
+from accessible_output3.outputs.auto import Auto
 
 class ScreenReader:
     _instance = None
@@ -7,7 +7,7 @@ class ScreenReader:
         if cls._instance is None:
             cls._instance = super(ScreenReader, cls).__new__(cls)
             try:
-                cls._instance.speaker = speech.Speaker()
+                cls._instance.speaker = Auto()
             except Exception:
                 cls._instance.speaker = None
         return cls._instance
@@ -15,7 +15,7 @@ class ScreenReader:
     def speak(self, text, interrupt=True):
         if self.speaker:
             try:
-                self.speaker.speak(text, interrupt=interrupt)
+                self.speaker(text, interrupt=interrupt)
             except Exception:
                 pass
 
