@@ -5,6 +5,9 @@ import time
 import threading
 from file_sharing import FileSender, FileReceiver, try_to_utf8
 from command_validator import CommandValidator
+from settings_manager import settings
+from screen_reader_manager import screen_reader
+from command_manager import command_manager
 
 class MainFrame(wx.Frame):
     def __init__(self, parent, title):
@@ -16,6 +19,7 @@ class MainFrame(wx.Frame):
         
         self.InitUI()
         self.gw.start()
+        self.SetupHotkeys()
 
         # Timer for protocol timeouts (NACK)
         self.timer = wx.Timer(self)
@@ -57,23 +61,70 @@ class MainFrame(wx.Frame):
 
         # File Menu
         fileMenu = wx.Menu()
+        sendFileItem = fileMenu.Append(wx.ID_ANY, 'Send File...\tCtrl+O', 'Select a file to send')
+        self.Bind(wx.EVT_MENU, self.OnSendFile, sendFileItem)
         openItem = fileMenu.Append(wx.ID_ANY, 'Open Received...', 'Parse and open URLs/Emails/Phones')
         self.Bind(wx.EVT_MENU, self.OnOpenReceived, openItem)
+        fileMenu.AppendSeparator()
         exitItem = fileMenu.Append(wx.ID_EXIT, 'Exit', 'Exit application')
         self.Bind(wx.EVT_MENU, self.OnExit, exitItem)
         menubar.Append(fileMenu, '&File')
 
         # Protocol Menu
         protocolMenu = wx.Menu()
-        for i in range(12):
-            item = protocolMenu.Append(wx.ID_ANY, f'Protocol {i}', f'Switch to protocol {i}', kind=wx.ITEM_RADIO)
-            if i == self.gw.protocol:
-                item.Check()
-            self.Bind(wx.EVT_MENU, lambda evt, p=i: self.OnSelectProtocol(p), item)
+        protocolItem = protocolMenu.Append(wx.ID_ANY, 'Select Protocol...', 'Choose encoding protocol')
+        self.Bind(wx.EVT_MENU, self.OnProtocolDialog, protocolItem)
         menubar.Append(protocolMenu, '&Protocol')
+
+        # Remote Menu
+        remoteMenu = wx.Menu()
+        self.remote_commands_items = {}
+        for cmd_name in command_manager.commands:
+            item = remoteMenu.Append(wx.ID_ANY, f"Execute {cmd_name}", f"Send {cmd_name} command")
+            self.Bind(wx.EVT_MENU, lambda evt, name=cmd_name: self.OnSendRemoteCommand(name), item)
+
+        remoteMenu.AppendSeparator()
+        hotkeyItem = remoteMenu.Append(wx.ID_ANY, "Assign Hotkeys...", "Assign hotkeys to remote commands")
+        self.Bind(wx.EVT_MENU, self.OnAssignHotkeys, hotkeyItem)
+        menubar.Append(remoteMenu, '&Remote')
 
         # Settings Menu
         settingsMenu = wx.Menu()
+
+        self.remoteProtocolItem = settingsMenu.Append(wx.ID_ANY, 'Send Protocol Change Command', kind=wx.ITEM_CHECK)
+        self.remoteProtocolItem.Check(settings.get("enable_remote_protocol_change", True))
+        self.Bind(wx.EVT_MENU, self.OnToggleRemoteProtocol, self.remoteProtocolItem)
+
+        self.receiveRemoteCommandsItem = settingsMenu.Append(wx.ID_ANY, 'Receive Remote Commands', kind=wx.ITEM_CHECK)
+        self.receiveRemoteCommandsItem.Check(settings.get("enable_remote_commands", False))
+        self.Bind(wx.EVT_MENU, self.OnToggleReceiveRemoteCommands, self.receiveRemoteCommandsItem)
+
+        # Device submenus
+        devices = sd.query_devices()
+        inputMenu = wx.Menu()
+        outputMenu = wx.Menu()
+
+        for i, d in enumerate(devices):
+            if d['max_input_channels'] > 0:
+                item = inputMenu.Append(wx.ID_ANY, d['name'], kind=wx.ITEM_RADIO)
+                if i == settings.get("devices")[0]:
+                    item.Check()
+                self.Bind(wx.EVT_MENU, lambda evt, idx=i: self.OnSelectDevice(0, idx), item)
+
+            if d['max_output_channels'] > 0:
+                item = outputMenu.Append(wx.ID_ANY, d['name'], kind=wx.ITEM_RADIO)
+                if i == settings.get("devices")[1]:
+                    item.Check()
+                self.Bind(wx.EVT_MENU, lambda evt, idx=i: self.OnSelectDevice(1, idx), item)
+
+        settingsMenu.AppendSubMenu(inputMenu, 'Input Device')
+        settingsMenu.AppendSubMenu(outputMenu, 'Output Device')
+
+        testDeviceItem = settingsMenu.Append(wx.ID_ANY, 'Test Device', 'Test selected audio devices')
+        self.Bind(wx.EVT_MENU, self.OnTestDevice, testDeviceItem)
+
+        settingsMenu.AppendSeparator()
+
         resetItem = settingsMenu.Append(wx.ID_ANY, 'Reset Instance', 'Reset ggwave instance')
         self.Bind(wx.EVT_MENU, self.OnReset, resetItem)
         menubar.Append(settingsMenu, '&Settings')
@@ -81,9 +132,175 @@ class MainFrame(wx.Frame):
         self.SetMenuBar(menubar)
         self.Show()
 
-    def OnSelectProtocol(self, protocol):
+    def OnSelectProtocol(self, protocol, payload_length=-1):
+        if self.remoteProtocolItem.IsChecked():
+            # Send command before changing local protocol
+            cmd = f"__RPC__:{protocol}:{payload_length}"
+            self.gw.send(cmd)
+            self.Log(f"Sent remote protocol change: {protocol}:{payload_length}")
+            time.sleep(1) # Give it some time to send
+
         self.gw.protocol = protocol
-        self.Log(f"Protocol set to {protocol}")
+        settings.set("protocol", protocol)
+        settings.set("payload_length", payload_length)
+        self.gw.switchinstance(payload_length)
+        self.Log(f"Protocol set to {protocol} (Payload: {payload_length if payload_length != -1 else 'Default'})")
+
+    def OnToggleRemoteProtocol(self, event):
+        settings.set("enable_remote_protocol_change", self.remoteProtocolItem.IsChecked())
+
+    def OnToggleReceiveRemoteCommands(self, event):
+        settings.set("enable_remote_commands", self.receiveRemoteCommandsItem.IsChecked())
+
+    def OnSendRemoteCommand(self, cmd_name):
+        # In a real scenario, we might want to ask for arguments
+        args = ""
+        if cmd_name == "open_url":
+            dlg = wx.TextEntryDialog(self, "Enter URL:", "Command Arguments")
+            if dlg.ShowModal() == wx.ID_OK:
+                args = dlg.GetValue()
+            dlg.Destroy()
+            if not args: return
+
+        cmd = f"__REMOTE__:{cmd_name}:{args}"
+        self.gw.send(cmd)
+        self.Log(f"Sent remote command: {cmd_name} {args}")
+
+    def OnAssignHotkeys(self, event):
+        dlg = wx.Dialog(self, title="Assign Hotkeys")
+        vbox = wx.BoxSizer(wx.VERTICAL)
+
+        current_hotkeys = settings.get("hotkeys", {})
+        hotkey_inputs = {}
+
+        for cmd_name in command_manager.commands:
+            hbox = wx.BoxSizer(wx.HORIZONTAL)
+            hbox.Add(wx.StaticText(dlg, label=f"{cmd_name}:"), proportion=1)
+            ctrl = wx.TextCtrl(dlg, value=current_hotkeys.get(cmd_name, ""))
+            hbox.Add(ctrl, proportion=2)
+            hotkey_inputs[cmd_name] = ctrl
+            vbox.Add(hbox, flag=wx.EXPAND | wx.ALL, border=5)
+
+        btn_box = wx.BoxSizer(wx.HORIZONTAL)
+        ok_btn = wx.Button(dlg, wx.ID_OK)
+        cancel_btn = wx.Button(dlg, wx.ID_CANCEL)
+        btn_box.Add(ok_btn)
+        btn_box.Add(cancel_btn, flag=wx.LEFT, border=5)
+        vbox.Add(btn_box, flag=wx.ALIGN_CENTER | wx.ALL, border=10)
+
+        dlg.SetSizer(vbox)
+        vbox.Fit(dlg)
+
+        if dlg.ShowModal() == wx.ID_OK:
+            new_hotkeys = {name: ctrl.GetValue() for name, ctrl in hotkey_inputs.items() if ctrl.GetValue()}
+            settings.set("hotkeys", new_hotkeys)
+            self.Log("Hotkeys updated. Please restart app to apply.")
+        dlg.Destroy()
+
+    def OnProtocolDialog(self, event):
+        protocols = [
+            "0: DT, Mid, No ECC, Slowest",
+            "1: DT, Mid, No ECC, Normal",
+            "2: DT, Mid, No ECC, Fastest",
+            "3: DT, Ultra, No ECC, Slowest",
+            "4: DT, Ultra, No ECC, Normal",
+            "5: DT, Ultra, No ECC, Fastest",
+            "6: DT, Low, ECC, Slowest",
+            "7: DT, Low, ECC, Normal",
+            "8: DT, Low, ECC, Fastest",
+            "9: ST, ECC, Slowest",
+            "10: ST, ECC, Normal",
+            "11: ST, ECC, Fastest",
+        ]
+
+        dlg = wx.Dialog(self, title="Select Protocol")
+        vbox = wx.BoxSizer(wx.VERTICAL)
+
+        vbox.Add(wx.StaticText(dlg, label="Choose Protocol:"), flag=wx.ALL, border=5)
+        self.protocol_list = wx.ListBox(dlg, choices=protocols, size=(250, 150))
+        self.protocol_list.SetSelection(self.gw.protocol)
+        vbox.Add(self.protocol_list, flag=wx.EXPAND | wx.ALL, border=5)
+
+        vbox.Add(wx.StaticText(dlg, label="Payload Length (4-64, -1 for default):"), flag=wx.ALL, border=5)
+        self.payload_box = wx.TextCtrl(dlg, value=str(settings.get("payload_length", -1)))
+        vbox.Add(self.payload_box, flag=wx.EXPAND | wx.ALL, border=5)
+
+        btn_box = wx.BoxSizer(wx.HORIZONTAL)
+        ok_btn = wx.Button(dlg, wx.ID_OK)
+        cancel_btn = wx.Button(dlg, wx.ID_CANCEL)
+        btn_box.Add(ok_btn)
+        btn_box.Add(cancel_btn, flag=wx.LEFT, border=5)
+        vbox.Add(btn_box, flag=wx.ALIGN_CENTER | wx.ALL, border=10)
+
+        dlg.SetSizer(vbox)
+        vbox.Fit(dlg)
+
+        if dlg.ShowModal() == wx.ID_OK:
+            protocol = self.protocol_list.GetSelection()
+            try:
+                payload = int(self.payload_box.GetValue())
+                if protocol >= 9 and (payload < 4 or payload > 64):
+                    wx.MessageBox("Payload length must be 4-64 for protocols 9-11", "Error", wx.OK | wx.ICON_ERROR)
+                    return
+                self.OnSelectProtocol(protocol, payload)
+            except ValueError:
+                wx.MessageBox("Invalid payload length", "Error", wx.OK | wx.ICON_ERROR)
+
+        dlg.Destroy()
+
+    def OnSelectDevice(self, type, idx):
+        devs = settings.get("devices")
+        devs[type] = idx
+        settings.set("devices", devs)
+        self.Log(f"{'Input' if type == 0 else 'Output'} device set to index {idx}")
+        # Need to restart GW to apply device changes
+        self.Log("Restarting audio stream...")
+        self.gw.stop()
+        import configure_sound_devices
+        configure_sound_devices.devs = devs
+        self.gw = gw.GW(self.output_handler.data_callback)
+        # Update output handler with new GW instance
+        self.output_handler.set_gw(self.gw)
+        # Re-attach the receiver and sender to the NEW GW instance
+        if self.output_handler.receiver:
+            self.output_handler.receiver.gw = self.gw
+        if self.output_handler.sender:
+            self.output_handler.sender.gw = self.gw
+        self.gw.start()
+
+    def OnTestDevice(self, event):
+        def _run_test():
+            wx.CallAfter(self.Log, "Testing output (2s sine wave)...")
+            context = configure_sound_devices.DeviceTestContext()
+            devs = settings.get("devices")
+            try:
+                with sd.OutputStream(
+                    device=devs[1],
+                    channels=1,
+                    callback=context.sinecallback,
+                    samplerate=44100
+                ):
+                    time.sleep(2)
+            except Exception as e:
+                wx.CallAfter(self.Log, f"Output test failed: {e}")
+                return
+
+            wx.CallAfter(self.Log, "Testing input (5s microphone echo)...")
+            try:
+                with sd.Stream(
+                    device=(devs[0], devs[1]),
+                    channels=1,
+                    callback=context.incallback,
+                    samplerate=44100
+                ):
+                    time.sleep(5)
+            except Exception as e:
+                wx.CallAfter(self.Log, f"Input test failed: {e}")
+                return
+
+            wx.CallAfter(self.Log, "Device test completed.")
+
+        threading.Thread(target=_run_test, daemon=True).start()
 
     def OnReset(self, event):
         self.gw.switchinstance(-1)
@@ -165,8 +382,34 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.Log, f"File transfer timed out or failed. State: {sender.state}")
         self.output_handler.sender = None
 
+    def SetupHotkeys(self):
+        hotkeys = settings.get("hotkeys", {})
+        accel_entries = []
+        self.hotkey_map = {}
+        for cmd_name, hotkey_str in hotkeys.items():
+            if not hotkey_str: continue
+            parts = hotkey_str.split('+')
+            flags = wx.ACCEL_NORMAL
+            key = None
+            for p in parts:
+                p = p.strip().upper()
+                if p == "CTRL": flags |= wx.ACCEL_CTRL
+                elif p == "SHIFT": flags |= wx.ACCEL_SHIFT
+                elif p == "ALT": flags |= wx.ACCEL_ALT
+                elif len(p) == 1: key = ord(p)
+                # handle F1-F12 if needed
+
+            if key:
+                vid = wx.NewIdRef()
+                accel_entries.append(wx.AcceleratorEntry(flags, key, vid))
+                self.Bind(wx.EVT_MENU, lambda evt, name=cmd_name: self.OnSendRemoteCommand(name), id=vid)
+
+        if accel_entries:
+            self.SetAcceleratorTable(wx.AcceleratorTable(accel_entries))
+
     def Log(self, msg):
         self.history.AppendText(msg + "\n")
+        screen_reader.speak(msg)
 
     def UpdateProgress(self, value, max_value):
         if value < max_value:
@@ -193,6 +436,36 @@ class GUIOutputHandler:
         self.receiver = FileReceiver(self.gw)
 
     def data_callback(self, data):
+        # Handle remote control command
+        text = try_to_utf8(data)
+        if text.startswith("__REMOTE__:"):
+            if not settings.get("enable_remote_commands", False):
+                wx.CallAfter(self.frame.Log, "Received remote command, but feature is disabled in settings.")
+                return
+            try:
+                parts = text.split(":")
+                cmd_name = parts[1]
+                args = parts[2] if len(parts) > 2 else ""
+                wx.CallAfter(self.frame.Log, f"Executing Remote Command: {cmd_name} {args}")
+                result = command_manager.execute(cmd_name, *([args] if args else []))
+                wx.CallAfter(self.frame.Log, f"Command Result: {result}")
+                return
+            except (ValueError, IndexError) as e:
+                wx.CallAfter(self.frame.Log, f"Error parsing remote command: {e}")
+                return
+
+        # Handle remote protocol change command
+        if text.startswith("__RPC__:"):
+            try:
+                parts = text.split(":")
+                protocol = int(parts[1])
+                payload = int(parts[2])
+                wx.CallAfter(self.frame.Log, f"Received Remote Protocol Change: Protocol {protocol}, Payload {payload}")
+                wx.CallAfter(self.frame.OnSelectProtocol, protocol, payload)
+                return
+            except (ValueError, IndexError):
+                pass
+
         # Handle sender state
         if self.sender and self.sender.state != "DONE":
             if self.sender.handle_response(data):
@@ -218,6 +491,13 @@ class GUIOutputHandler:
         wx.CallAfter(self.frame.Log, text)
 
 if __name__ == "__main__":
+    import configure_sound_devices
+    if configure_sound_devices.devs == [-1, -1]:
+        app = wx.App()
+        wx.MessageBox("No audio devices selected. Please run CLI first to configure them or select them in Settings menu.", "Error", wx.OK | wx.ICON_ERROR)
+        # However, the user wants GUI device testing, so we should allow it.
+        # Let's initialize with default (-1, -1) and let the user select in menu.
+
     app = wx.App()
     MainFrame(None, title='Data Over Sound')
     app.MainLoop()

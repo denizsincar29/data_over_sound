@@ -10,6 +10,7 @@ from threading import Lock, Event
 import numpy as np
 import ggwave
 import sounddevice as sd
+from settings_manager import settings
 
 ggwave.disableLog()
 
@@ -37,7 +38,7 @@ class GW:
         """
         self.sendqueue = Queue()
         self.callback_function = callback_function
-        self.protocol = 2
+        self.protocol = settings.get("protocol", 2)
         
         # Thread synchronization
         self._instance_lock = Lock()
