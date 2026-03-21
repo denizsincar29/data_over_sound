@@ -5,12 +5,15 @@ This module provides the GW class for sending and receiving data over sound wave
 """
 
 import configure_sound_devices
+import time
+import threading
 from queue import Queue, Empty
 from threading import Lock, Event
 import numpy as np
 import ggwave
 import sounddevice as sd
 from settings_manager import settings
+from typing import Optional
 
 ggwave.disableLog()
 
@@ -18,6 +21,22 @@ ggwave.disableLog()
 RATE = 48000
 CHANNELS = 1
 FRAMES = 1024
+
+
+def delayed_send(gw_instance: "GW", data: bytes, protocol: Optional[int] = None, delay: float = 0.5) -> None:
+    """
+    Sends data after a delay in a separate thread to avoid blocking.
+
+    Args:
+        gw_instance: The audio gateway instance.
+        data: The data to send.
+        protocol: The protocol ID to use.
+        delay: Delay in seconds.
+    """
+    def _send():
+        time.sleep(delay)
+        gw_instance.send(data, protocol=protocol)
+    threading.Thread(target=_send, daemon=True).start()
 
 
 class GW:

@@ -3,15 +3,17 @@ import gw
 import os
 import time
 import threading
-from file_sharing import FileSender, FileReceiver, try_to_utf8
+from file_sharing import FileSender, FileReceiver, FileSharingProtocol, try_to_utf8
 from command_validator import CommandValidator
 from settings_manager import settings
 from screen_reader_manager import screen_reader
 from command_manager import command_manager, AppAPI
 import sounddevice as sd
+from typing import Any, Optional, List, Tuple
 
 class MainFrame(wx.Frame):
-    def __init__(self, parent, title):
+    """Main application window for the GUI."""
+    def __init__(self, parent: Optional[wx.Window], title: str):
         super(MainFrame, self).__init__(parent, title=title, size=(600, 500))
         
         self.output_handler = GUIOutputHandler(self)
@@ -23,8 +25,8 @@ class MainFrame(wx.Frame):
         command_manager.set_api(api)
 
         self.query_active = False
-        self.query_functions = []
-        self.query_last_received = 0
+        self.query_functions: List[str] = []
+        self.query_last_received: float = 0
 
         self.InitUI()
         self.gw.start()
@@ -35,7 +37,8 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_TIMER, self.OnTimer, self.timer)
         self.timer.Start(1000) # Check every second
 
-    def InitUI(self):
+    def InitUI(self) -> None:
+        """Initialize the user interface."""
         panel = wx.Panel(self)
         vbox = wx.BoxSizer(wx.VERTICAL)
 
@@ -134,7 +137,8 @@ class MainFrame(wx.Frame):
         self.SetMenuBar(self.menubar)
         self.Show()
 
-    def UpdateRemoteMenu(self):
+    def UpdateRemoteMenu(self) -> None:
+        """Update the remote menu with current commands."""
         # Clear existing items
         for item in self.remoteMenu.GetMenuItems():
             self.remoteMenu.DestroyItem(item)
@@ -160,7 +164,8 @@ class MainFrame(wx.Frame):
         hotkeyItem = self.remoteMenu.Append(wx.ID_ANY, "Assign Hotkeys...", "Assign hotkeys to remote commands")
         self.Bind(wx.EVT_MENU, self.OnAssignHotkeys, hotkeyItem)
 
-    def OnCreatePlugin(self, event):
+    def OnCreatePlugin(self, event: wx.CommandEvent) -> None:
+        """Handle plugin creation."""
         dlg = wx.TextEntryDialog(self, "Enter name for new plugin folder:", "Create Plugin")
         if dlg.ShowModal() == wx.ID_OK:
             name = dlg.GetValue().strip()
@@ -171,12 +176,14 @@ class MainFrame(wx.Frame):
                     self.UpdateRemoteMenu()
         dlg.Destroy()
 
-    def OnRefreshLocalCommands(self, event):
+    def OnRefreshLocalCommands(self, event: wx.CommandEvent) -> None:
+        """Reload local plugins and refresh UI."""
         command_manager.load_plugins()
         self.UpdateRemoteMenu()
         self.Log("Local commands refreshed.")
 
-    def OnQueryRemoteFunctions(self, event):
+    def OnQueryRemoteFunctions(self, event: wx.CommandEvent) -> None:
+        """Initiate remote function query."""
         self.Log("Querying remote device for functions...")
         self.gw.send("__QUERY_REMOTE__")
         # Initialize query tracking
@@ -184,7 +191,15 @@ class MainFrame(wx.Frame):
         self.query_active = True
         self.query_functions = []
 
-    def OnSelectProtocol(self, protocol, payload_length=-1, broadcast=True):
+    def OnSelectProtocol(self, protocol: int, payload_length: int = -1, broadcast: bool = True) -> None:
+        """
+        Change audio protocol.
+
+        Args:
+            protocol: Protocol ID.
+            payload_length: Payload length (-1 for default).
+            broadcast: Whether to inform the remote device.
+        """
         if broadcast and self.remoteProtocolItem.IsChecked():
             # Send command before changing local protocol
             cmd = f"__RPC__:{protocol}:{payload_length}"
@@ -198,13 +213,16 @@ class MainFrame(wx.Frame):
         self.gw.switchinstance(payload_length)
         self.Log(f"Protocol set to {protocol} (Payload: {payload_length if payload_length != -1 else 'Default'})")
 
-    def OnToggleRemoteProtocol(self, event):
+    def OnToggleRemoteProtocol(self, event: wx.CommandEvent) -> None:
+        """Toggle remote protocol change broadcasting."""
         settings.set("enable_remote_protocol_change", self.remoteProtocolItem.IsChecked())
 
-    def OnToggleReceiveRemoteCommands(self, event):
+    def OnToggleReceiveRemoteCommands(self, event: wx.CommandEvent) -> None:
+        """Toggle remote command execution."""
         settings.set("enable_remote_commands", self.receiveRemoteCommandsItem.IsChecked())
 
-    def OnSendRemoteCommand(self, cmd_name):
+    def OnSendRemoteCommand(self, cmd_name: str) -> None:
+        """Initiate sending a remote command."""
         # In a real scenario, we might want to ask for arguments
         args = ""
         if cmd_name == "open_url":
@@ -218,7 +236,8 @@ class MainFrame(wx.Frame):
         self.gw.send(cmd)
         self.Log(f"Sent remote command: {cmd_name} {args}")
 
-    def OnAssignHotkeys(self, event):
+    def OnAssignHotkeys(self, event: wx.CommandEvent) -> None:
+        """Open hotkey assignment dialog."""
         dlg = wx.Dialog(self, title="Assign Hotkeys")
         vbox = wx.BoxSizer(wx.VERTICAL)
 
@@ -249,7 +268,8 @@ class MainFrame(wx.Frame):
             self.Log("Hotkeys updated. Please restart app to apply.")
         dlg.Destroy()
 
-    def OnProtocolDialog(self, event):
+    def OnProtocolDialog(self, event: wx.CommandEvent) -> None:
+        """Open protocol selection dialog."""
         protocols = [
             "0: DT, Mid, No ECC, Slowest",
             "1: DT, Mid, No ECC, Normal",
@@ -283,7 +303,7 @@ class MainFrame(wx.Frame):
         self.payload_box = wx.TextCtrl(dlg, value=str(initial_payload if initial_payload != -1 else 32))
         vbox.Add(self.payload_box, flag=wx.EXPAND | wx.ALL, border=5)
 
-        def UpdateUI(protocol_idx):
+        def UpdateUI(protocol_idx: int):
             is_st = protocol_idx >= 9
             if is_st:
                 self.payload_checkbox.SetValue(True)
@@ -335,7 +355,8 @@ class MainFrame(wx.Frame):
 
         dlg.Destroy()
 
-    def OnSelectDevice(self, type, idx):
+    def OnSelectDevice(self, type: int, idx: int) -> None:
+        """Handle audio device selection."""
         devs = settings.get("devices")
         devs[type] = idx
         settings.set("devices", devs)
@@ -355,7 +376,8 @@ class MainFrame(wx.Frame):
             self.output_handler.sender.gw = self.gw
         self.gw.start()
 
-    def OnTestDevice(self, event):
+    def OnTestDevice(self, event: wx.CommandEvent) -> None:
+        """Initiate audio device test."""
         def _run_test():
             wx.CallAfter(self.Log, "Testing output (2s sine wave)...")
             context = configure_sound_devices.DeviceTestContext()
@@ -392,21 +414,35 @@ class MainFrame(wx.Frame):
 
         threading.Thread(target=_run_test, daemon=True).start()
 
-    def OnReset(self, event):
+    def OnReset(self, event: wx.CommandEvent) -> None:
+        """Reset ggwave instance."""
         self.gw.switchinstance(-1)
-        self.Log("Instance reset")
+        self.Log("Instance reset.")
 
-    def OnTimer(self, event):
-        res = self.output_handler.receiver.check_timeout()
-        if res == "SENT_NACK":
-            self.Log(f"Still waiting for chunks of {self.output_handler.receiver.filename}. Sent NACK.")
+    def OnTimer(self, event: wx.TimerEvent) -> None:
+        """Handle periodic timeout checks."""
+        if not self.output_handler.receiver:
+            return
+
+        status, details = self.output_handler.receiver.check_timeout()
+        if status:
+            if status == "SEND_READY":
+                self.Log(f"Resending READY for {self.output_handler.receiver.filename}...")
+                gw.delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + details, protocol=FileSharingProtocol.FILE_PROTOCOL)
+            elif status == "SEND_NACK":
+                self.Log(f"Still waiting for chunks of {self.output_handler.receiver.filename}. Sent NACK.")
+                nack_msg = FileSharingProtocol.NACK_PREFIX + ",".join(map(str, details)).encode()
+                gw.delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + nack_msg, protocol=FileSharingProtocol.FILE_PROTOCOL)
+            elif status == "ABORT":
+                self.Log(details)
 
         if self.query_active:
             if time.time() - self.query_last_received > 30:
                 self.query_active = False
                 self.Log(f"Remote query timed out. Received: {', '.join(self.query_functions)}")
 
-    def OnOpenReceived(self, event):
+    def OnOpenReceived(self, event: wx.CommandEvent) -> None:
+        """Handle opening of received URLs/Emails/Phones."""
         from webbrowser import open as wopen
         import parse
 
@@ -420,7 +456,7 @@ class MainFrame(wx.Frame):
             wx.MessageBox("No URLs, emails, or phone numbers found to open", "No data", wx.OK | wx.ICON_INFORMATION)
             return
 
-        dlg = wx.MessageDialog(self, "The following items will be opened:\n" + "\n".join(items_to_open),
+        dlg = wx.MessageDialog(self, f"The following items will be opened:\n{chr(10).join(items_to_open)}",
                                "Confirm Open", wx.YES_NO | wx.ICON_QUESTION)
         if dlg.ShowModal() == wx.ID_YES:
             for url in result["urls"]: wopen(url)
@@ -428,7 +464,8 @@ class MainFrame(wx.Frame):
             for phone in result["phones"]: wopen(f"tel:{phone}")
         dlg.Destroy()
 
-    def OnSend(self, event):
+    def OnSend(self, event: wx.CommandEvent) -> None:
+        """Handle send message action."""
         msg = self.input_text.GetValue()
         if msg:
             if msg.startswith("/"):
@@ -439,7 +476,8 @@ class MainFrame(wx.Frame):
                 self.Log(f"Me: {msg}")
             self.input_text.Clear()
 
-    def OnSendFile(self, event):
+    def OnSendFile(self, event: wx.CommandEvent) -> None:
+        """Initiate send file action."""
         with wx.FileDialog(self, "Open file", wildcard="*.*",
                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as fileDialog:
             if fileDialog.ShowModal() == wx.ID_CANCEL:
@@ -448,11 +486,28 @@ class MainFrame(wx.Frame):
 
         threading.Thread(target=self._SendFileThread, args=(path,), daemon=True).start()
 
-    def _SendFileThread(self, path):
+    def _SendFileThread(self, path: str) -> None:
+        """Threaded file sending handler."""
         sender = FileSender(self.gw, path)
         self.output_handler.sender = sender
+
+        # Protocol check
+        if self.gw.protocol != FileSharingProtocol.FILE_PROTOCOL:
+            wx.CallAfter(self.Log, f"Switching remote protocol to {FileSharingProtocol.FILE_PROTOCOL}...")
+            cmd = f"__RPC__:{FileSharingProtocol.FILE_PROTOCOL}:-1"
+            self.gw.send(cmd)
+
+            # FIX: Also switch LOCAL protocol of the sender
+            wx.CallAfter(self.Log, f"Switching local protocol to {FileSharingProtocol.FILE_PROTOCOL}...")
+            self.gw.protocol = FileSharingProtocol.FILE_PROTOCOL
+            settings.set("protocol", FileSharingProtocol.FILE_PROTOCOL)
+            self.gw.switchinstance(-1)
+
+            time.sleep(0.5) # SAR delay
+
         wx.CallAfter(self.Log, f"Starting handshake for {sender.filename}...")
-        sender.send_handshake()
+        self.gw.send(sender.get_handshake_data(), protocol=FileSharingProtocol.FILE_PROTOCOL)
+        sender.state = "WAITING_FOR_READY"
 
         # Wait for ready signal (30s timeout)
         start_time = time.time()
@@ -468,7 +523,7 @@ class MainFrame(wx.Frame):
 
         # Wait for completion or retransmission requests
         start_time = time.time()
-        while sender.state == "WAITING_FOR_ACK" and time.time() - start_time < 60:
+        while sender.state != "DONE" and time.time() - start_time < 120:
             time.sleep(0.1)
 
         if sender.state == "DONE":
@@ -477,7 +532,8 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.Log, f"File transfer timed out or failed. State: {sender.state}")
         self.output_handler.sender = None
 
-    def SetupHotkeys(self):
+    def SetupHotkeys(self) -> None:
+        """Configure keyboard shortcuts."""
         hotkeys = settings.get("hotkeys", {})
         accel_entries = []
         self.hotkey_map = {}
@@ -502,11 +558,13 @@ class MainFrame(wx.Frame):
         if accel_entries:
             self.SetAcceleratorTable(wx.AcceleratorTable(accel_entries))
 
-    def Log(self, msg):
-        self.history.AppendText(msg + "\n")
+    def Log(self, msg: str) -> None:
+        """Log message to UI and announce via screen reader."""
+        self.history.AppendText(f"{msg}\n")
         screen_reader.speak(msg)
 
-    def UpdateProgress(self, value, max_value):
+    def UpdateProgress(self, value: int, max_value: int) -> None:
+        """Update progress bar."""
         if value < max_value:
             self.progress.Show()
             self.progress.SetRange(max_value)
@@ -515,23 +573,27 @@ class MainFrame(wx.Frame):
             self.progress.Hide()
         self.Layout()
 
-    def OnExit(self, event):
+    def OnExit(self, event: wx.CommandEvent) -> None:
+        """Handle application exit."""
         self.gw.stop()
         self.Close(True)
 
 class GUIOutputHandler:
-    def __init__(self, frame):
+    """Handler for processing received data in the GUI context."""
+    def __init__(self, frame: MainFrame):
         self.frame = frame
-        self.receiver = None
-        self.sender = None
-        self.gw = None
-        self.data = ""
+        self.receiver: Optional[FileReceiver] = None
+        self.sender: Optional[FileSender] = None
+        self.gw: Optional[gw.GW] = None
+        self.data: str = ""
 
-    def set_gw(self, gw_instance):
+    def set_gw(self, gw_instance: gw.GW) -> None:
+        """Set the audio gateway instance."""
         self.gw = gw_instance
         self.receiver = FileReceiver(self.gw)
 
-    def data_callback(self, data):
+    def data_callback(self, data: bytes) -> None:
+        """Process received audio data."""
         # Handle remote control command
         text = try_to_utf8(data)
 
@@ -539,10 +601,11 @@ class GUIOutputHandler:
             if not settings.get("enable_remote_commands", False):
                 return
             def respond():
+                time.sleep(0.5) # SAR delay
                 funcs = command_manager.get_remote_functions()
                 for f in funcs:
                     self.gw.send(f)
-                    time.sleep(1)
+                    time.sleep(0.5) # SAR delay between names
                 self.gw.send("$EOF")
             threading.Thread(target=respond, daemon=True).start()
             return
@@ -587,22 +650,44 @@ class GUIOutputHandler:
 
         # Handle sender state
         if self.sender and self.sender.state != "DONE":
-            if self.sender.handle_response(data):
+            action, details = self.sender.handle_response(data)
+            if action == "START_SENDING":
+                def send_all():
+                    time.sleep(0.5) # SAR delay
+                    for i in range(self.sender.num_chunks):
+                        self.gw.send(self.sender.get_chunk_data(i), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                    self.gw.send(self.sender.get_eof_data(), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                threading.Thread(target=send_all, daemon=True).start()
+                return
+            elif action == "RESEND_CHUNKS":
+                def resend():
+                    time.sleep(0.5) # SAR delay
+                    for i in details:
+                        self.gw.send(self.sender.get_chunk_data(i), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                    self.gw.send(self.sender.get_eof_data(), protocol=FileSharingProtocol.FILE_PROTOCOL)
+                threading.Thread(target=resend, daemon=True).start()
+                return
+            elif action == "COMPLETED":
                 return
 
         # Handle receiver state
         if self.receiver:
-            res = self.receiver.handle_data(data)
-            if res:
-                if res == "HANDSHAKE_RECEIVED":
+            status, details = self.receiver.handle_data(data)
+            if status:
+                if status == "SEND_READY":
                     wx.CallAfter(self.frame.Log, f"Receiving file: {self.receiver.filename} ({self.receiver.num_chunks} chunks)")
                     wx.CallAfter(self.frame.UpdateProgress, 0, self.receiver.num_chunks)
-                elif res == "CHUNK_RECEIVED":
+                    gw.delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + details, protocol=FileSharingProtocol.FILE_PROTOCOL)
+                elif status == "CHUNK_RECEIVED":
                     wx.CallAfter(self.frame.UpdateProgress, len(self.receiver.received_chunks), self.receiver.num_chunks)
-                elif res == "SUCCESS":
+                elif status == "SEND_SUCCESS":
                     wx.CallAfter(self.frame.Log, f"File received successfully: {self.receiver.filename}")
                     wx.CallAfter(self.frame.UpdateProgress, self.receiver.num_chunks, self.receiver.num_chunks)
+                    gw.delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + FileSharingProtocol.SUCCESS_SIGNAL, protocol=FileSharingProtocol.FILE_PROTOCOL)
                     self.receiver.reset()
+                elif status == "SEND_NACK":
+                    nack_msg = FileSharingProtocol.NACK_PREFIX + ",".join(map(str, details)).encode()
+                    gw.delayed_send(self.gw, FileSharingProtocol.CONTROL_BYTE + nack_msg, protocol=FileSharingProtocol.FILE_PROTOCOL)
                 return
 
         text = try_to_utf8(data)
