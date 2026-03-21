@@ -11,7 +11,14 @@ dependencies = [
     "sounddevice",
     "cython",
     "rust-enum",
+    "wxpython",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["/"]
+
+[tool.uv]
+extra-build-dependencies = { ggwave = ["Cython"] }
 
 [build-system]
 requires = ["hatchling"]

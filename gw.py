@@ -35,7 +35,6 @@ class GW:
             callback_function: Function to call when data is received
             **kwargs: Additional parameters to pass to ggwave
         """
-        self.q = Queue()
         self.sendqueue = Queue()
         self.callback_function = callback_function
         self.protocol = 2
@@ -90,8 +89,6 @@ class GW:
             res = ggwave.decode(self.instance, bytes(indata))
         
         if res is not None:
-            res = try_to_utf8(res)
-            self.q.put(res)
             # Call user callback (note: this is called from audio thread)
             try:
                 self.callback_function(res)
