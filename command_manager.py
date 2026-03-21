@@ -66,6 +66,9 @@ class CommandManager:
         self.load_plugins()
 
     def load_plugins(self):
+        # Clear existing commands before reloading
+        self.commands.clear()
+
         # Default commands
         self.commands["shutdown"] = lambda *args: self._shutdown()
         self.commands["restart"] = lambda *args: self._restart()

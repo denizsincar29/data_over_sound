@@ -137,7 +137,7 @@ class MainFrame(wx.Frame):
     def UpdateRemoteMenu(self):
         # Clear existing items
         for item in self.remoteMenu.GetMenuItems():
-            self.remoteMenu.Remove(item)
+            self.remoteMenu.DestroyItem(item)
 
         # Dynamic commands
         for cmd_name in command_manager.commands:
@@ -184,8 +184,8 @@ class MainFrame(wx.Frame):
         self.query_active = True
         self.query_functions = []
 
-    def OnSelectProtocol(self, protocol, payload_length=-1):
-        if self.remoteProtocolItem.IsChecked():
+    def OnSelectProtocol(self, protocol, payload_length=-1, broadcast=True):
+        if broadcast and self.remoteProtocolItem.IsChecked():
             # Send command before changing local protocol
             cmd = f"__RPC__:{protocol}:{payload_length}"
             self.gw.send(cmd)
@@ -546,7 +546,7 @@ class GUIOutputHandler:
                 wx.CallAfter(self.frame.Log, f"Remote functions received: {', '.join(self.frame.query_functions)}")
             else:
                 self.frame.query_functions.append(text)
-                self.frame.query_last_received = time.time()
+                self.frame.query_last_received = time.time() # Reset timeout
                 wx.CallAfter(self.frame.Log, f"Remote function: {text}")
             return
 
@@ -573,7 +573,7 @@ class GUIOutputHandler:
                 protocol = int(parts[1])
                 payload = int(parts[2])
                 wx.CallAfter(self.frame.Log, f"Received Remote Protocol Change: Protocol {protocol}, Payload {payload}")
-                wx.CallAfter(self.frame.OnSelectProtocol, protocol, payload)
+                wx.CallAfter(self.frame.OnSelectProtocol, protocol, payload, broadcast=False)
                 return
             except (ValueError, IndexError):
                 pass
