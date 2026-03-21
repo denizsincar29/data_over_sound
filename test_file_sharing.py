@@ -7,7 +7,7 @@ class MockGW:
         self.sent_data = []
         self.protocol = 2
 
-    def send(self, data):
+    def send(self, data, protocol=None):
         self.sent_data.append(data)
 
     def switchinstance(self, pl):

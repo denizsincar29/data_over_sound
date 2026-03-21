@@ -290,8 +290,11 @@ class MainFrame(wx.Frame):
                 self.payload_checkbox.Hide()
                 self.payload_label.Show()
                 self.payload_box.Show()
+                self.payload_box.SetValue("32")
+                self.payload_box.Disable()
             else:
                 self.payload_checkbox.Show()
+                self.payload_box.Enable()
                 if self.payload_checkbox.IsChecked():
                     self.payload_label.Show()
                     self.payload_box.Show()

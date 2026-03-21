@@ -116,15 +116,17 @@ class GW:
         self.stream.stop()
         self.stream.close()
 
-    def send(self, data):
+    def send(self, data, protocol=None):
         """
         Encode and queue data for transmission.
         
         Args:
             data: String or bytes to transmit over audio
+            protocol: Optional protocolId to override default protocol
         """
         with self._instance_lock:
-            encoded = ggwave.encode(data, protocolId=self.protocol, instance=self.instance)
+            p_id = protocol if protocol is not None else self.protocol
+            encoded = ggwave.encode(data, protocolId=p_id, instance=self.instance)
             if not encoded:
                 return
 
