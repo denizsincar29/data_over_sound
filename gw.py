@@ -51,13 +51,17 @@ class GW:
         self.instance = ggwave.init(self.pars)
         
         # Initialize audio stream
+        devices = configure_sound_devices.devs
+        input_device = devices[0] if devices[0] != -1 else None
+        output_device = devices[1] if devices[1] != -1 else None
+
         self.stream = sd.Stream(
             samplerate=RATE,
             blocksize=FRAMES,
             dtype="float32",
             channels=CHANNELS,
             callback=self.callback,
-            device=configure_sound_devices.devs,
+            device=(input_device, output_device),
         )
         self.started = False
         self.start()
@@ -112,19 +116,31 @@ class GW:
         self.stream.stop()
         self.stream.close()
 
-    def send(self, data):
+    def send(self, data, protocol=None):
         """
         Encode and queue data for transmission.
         
         Args:
             data: String or bytes to transmit over audio
+            protocol: Optional protocolId to override default protocol
         """
         with self._instance_lock:
+            p_id = protocol if protocol is not None else self.protocol
+            encoded = ggwave.encode(data, protocolId=p_id, instance=self.instance)
+            if not encoded:
+                return
+
             wf = np.frombuffer(
-                ggwave.encode(data, protocolId=self.protocol, instance=self.instance),
+                encoded,
                 dtype="float32",
             )
         
+        # Ensure the waveform is a multiple of FRAMES by padding with zeros
+        remainder = len(wf) % FRAMES
+        if remainder > 0:
+            padding = FRAMES - remainder
+            wf = np.concatenate([wf, np.zeros(padding, dtype="float32")])
+
         # Split audio into chunks and queue for transmission
         for i in range(0, len(wf), FRAMES):
             self.sendqueue.put(wf[i : i + FRAMES])

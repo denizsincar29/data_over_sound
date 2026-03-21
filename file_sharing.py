@@ -8,7 +8,10 @@ class FileSharingProtocol:
     SUCCESS_SIGNAL = b"FS_SUCCESS"
     NACK_PREFIX = b"FS_NACK:"
 
-    CHUNK_SIZE = 64  # Safe size for most ggwave protocols
+    # Use Audible Fast (Protocol 2) for file transfer for best speed/reliability.
+    # Audible protocols use variable length payloads (up to 140 bytes).
+    FILE_PROTOCOL = 2
+    CHUNK_SIZE = 138  # Leave 2 bytes for the index header
 
     @staticmethod
     def get_hash(data):
@@ -29,8 +32,15 @@ class FileSender:
         self.state = "IDLE"
 
     def send_handshake(self):
-        handshake = f"{self.filename}|{self.num_chunks}|{self.hash}".encode()
-        self.gw.send(FileSharingProtocol.HANDSHAKE_PREFIX + handshake)
+        # Even with variable length, we should limit filename to keep handshake under 140 bytes.
+        limit = 130 - len(FileSharingProtocol.HANDSHAKE_PREFIX) - len(str(self.num_chunks)) - len(self.hash) - 2
+        safe_filename = self.filename
+        if len(safe_filename) > limit:
+            name, ext = os.path.splitext(self.filename)
+            safe_filename = name[:limit-len(ext)] + ext
+
+        handshake = f"{safe_filename}|{self.num_chunks}|{self.hash}".encode()
+        self.gw.send(FileSharingProtocol.HANDSHAKE_PREFIX + handshake, protocol=FileSharingProtocol.FILE_PROTOCOL)
         self.state = "WAITING_FOR_READY"
 
     def handle_response(self, response):
@@ -48,7 +58,7 @@ class FileSender:
                     indices = [int(i) for i in indices_str.split(",") if i.strip()]
                     self.resend_chunks(indices)
                     return True
-                except:
+                except Exception:
                     return False
         return False
 
@@ -59,7 +69,7 @@ class FileSender:
     def send_chunk(self, index):
         header = index.to_bytes(2, byteorder='big')
         payload = header + self.chunks[index]
-        self.gw.send(payload)
+        self.gw.send(payload, protocol=FileSharingProtocol.FILE_PROTOCOL)
 
     def resend_chunks(self, indices):
         for i in indices:
@@ -92,9 +102,9 @@ class FileReceiver:
                 self.received_chunks = {}
                 self.state = "RECEIVING"
                 self.last_activity = time.time()
-                self.gw.send(FileSharingProtocol.READY_SIGNAL)
+                self.gw.send(FileSharingProtocol.READY_SIGNAL, protocol=FileSharingProtocol.FILE_PROTOCOL)
                 return "HANDSHAKE_RECEIVED"
-            except:
+            except Exception:
                 return "ERROR"
 
         if self.state == "RECEIVING":
@@ -109,7 +119,7 @@ class FileReceiver:
                         if len(self.received_chunks) == self.num_chunks:
                             return self.check_completion()
                         return "CHUNK_RECEIVED"
-                except:
+                except Exception:
                     pass
             return None
 
@@ -142,7 +152,7 @@ class FileReceiver:
                 filepath = os.path.join(self.save_dir, safe_filename)
                 with open(filepath, "wb") as f:
                     f.write(all_data)
-                self.gw.send(FileSharingProtocol.SUCCESS_SIGNAL)
+                self.gw.send(FileSharingProtocol.SUCCESS_SIGNAL, protocol=FileSharingProtocol.FILE_PROTOCOL)
                 self.state = "DONE"
                 return "SUCCESS"
             else:
@@ -157,7 +167,7 @@ class FileReceiver:
         missing = [str(i) for i in range(self.num_chunks) if i not in self.received_chunks]
         if missing:
             nack = FileSharingProtocol.NACK_PREFIX + ",".join(missing).encode()
-            self.gw.send(nack)
+            self.gw.send(nack, protocol=FileSharingProtocol.FILE_PROTOCOL)
 
 def try_to_utf8(val):
     """

@@ -131,17 +131,9 @@ class Output:
         """
         return parse.extract_info(self.data)
 
-output = Output()
-g=gw.GW(output.data_callback)
-output.gw = g
-output.receiver = FileReceiver(g)
-g.start()
-
-# Initialize API and command manager
-api = AppAPI(g, print)
-command_manager.set_api(api)
-
-# Initialize command validator
+# Global app state components
+output = None
+g = None
 validator = CommandValidator()
 
 
@@ -329,6 +321,9 @@ def handle_remote_command(parsed):
 
 def command(cmd):
     """Process a command or message"""
+    if not g:
+        return "Audio system not initialized"
+
     if not cmd.startswith("/"):
         g.send(cmd)
         return "sending"
@@ -342,9 +337,20 @@ def command(cmd):
 
 def main():
     """Main application loop."""
+    global g, output
     import configure_sound_devices
     if configure_sound_devices.devs == [-1, -1]:
         configure_sound_devices.test()
+
+    output = Output()
+    g = gw.GW(output.data_callback)
+    output.gw = g
+    output.receiver = FileReceiver(g)
+    g.start()
+
+    # Initialize API and command manager
+    api = AppAPI(g, print)
+    command_manager.set_api(api)
 
     print("Welcome to data_over_sound")
     print("Type /help for help")
