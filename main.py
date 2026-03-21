@@ -357,9 +357,12 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.Log, "Testing output (2s sine wave)...")
             context = configure_sound_devices.DeviceTestContext()
             devs = settings.get("devices")
+            out_dev = devs[1] if devs[1] != -1 else None
+            in_dev = devs[0] if devs[0] != -1 else None
+
             try:
                 with sd.OutputStream(
-                    device=devs[1],
+                    device=out_dev,
                     channels=1,
                     callback=context.sinecallback,
                     samplerate=44100
@@ -372,7 +375,7 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.Log, "Testing input (5s microphone echo)...")
             try:
                 with sd.Stream(
-                    device=(devs[0], devs[1]),
+                    device=(in_dev, out_dev),
                     channels=1,
                     callback=context.incallback,
                     samplerate=44100
@@ -519,6 +522,7 @@ class GUIOutputHandler:
         self.receiver = None
         self.sender = None
         self.gw = None
+        self.data = ""
 
     def set_gw(self, gw_instance):
         self.gw = gw_instance
@@ -603,13 +607,6 @@ class GUIOutputHandler:
         wx.CallAfter(self.frame.Log, text)
 
 if __name__ == "__main__":
-    import configure_sound_devices
-    if configure_sound_devices.devs == [-1, -1]:
-        app = wx.App()
-        wx.MessageBox("No audio devices selected. Please run CLI first to configure them or select them in Settings menu.", "Error", wx.OK | wx.ICON_ERROR)
-        # However, the user wants GUI device testing, so we should allow it.
-        # Let's initialize with default (-1, -1) and let the user select in menu.
-
     app = wx.App()
     MainFrame(None, title='Data Over Sound')
     app.MainLoop()

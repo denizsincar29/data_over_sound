@@ -51,13 +51,17 @@ class GW:
         self.instance = ggwave.init(self.pars)
         
         # Initialize audio stream
+        devices = configure_sound_devices.devs
+        input_device = devices[0] if devices[0] != -1 else None
+        output_device = devices[1] if devices[1] != -1 else None
+
         self.stream = sd.Stream(
             samplerate=RATE,
             blocksize=FRAMES,
             dtype="float32",
             channels=CHANNELS,
             callback=self.callback,
-            device=configure_sound_devices.devs,
+            device=(input_device, output_device),
         )
         self.started = False
         self.start()

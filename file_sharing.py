@@ -8,7 +8,7 @@ class FileSharingProtocol:
     SUCCESS_SIGNAL = b"FS_SUCCESS"
     NACK_PREFIX = b"FS_NACK:"
 
-    CHUNK_SIZE = 64  # Safe size for most ggwave protocols
+    CHUNK_SIZE = 30  # Safe size for all ggwave protocols (fits in default 32-byte payload)
 
     @staticmethod
     def get_hash(data):
@@ -48,7 +48,7 @@ class FileSender:
                     indices = [int(i) for i in indices_str.split(",") if i.strip()]
                     self.resend_chunks(indices)
                     return True
-                except:
+                except Exception:
                     return False
         return False
 
@@ -94,7 +94,7 @@ class FileReceiver:
                 self.last_activity = time.time()
                 self.gw.send(FileSharingProtocol.READY_SIGNAL)
                 return "HANDSHAKE_RECEIVED"
-            except:
+            except Exception:
                 return "ERROR"
 
         if self.state == "RECEIVING":
@@ -109,7 +109,7 @@ class FileReceiver:
                         if len(self.received_chunks) == self.num_chunks:
                             return self.check_completion()
                         return "CHUNK_RECEIVED"
-                except:
+                except Exception:
                     pass
             return None
 

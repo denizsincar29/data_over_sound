@@ -67,9 +67,10 @@ class TestFileSharing(unittest.TestCase):
         self.assertEqual(content, b"Hello World! This is a test file for sharing over sound.")
 
     def test_retransmission(self):
-        # Create a larger file to have multiple chunks
+        # Create a file that fits in exactly 2 chunks
+        chunk_size = FileSharingProtocol.CHUNK_SIZE
         with open(self.test_file, "wb") as f:
-            f.write(b"A" * 100) # Should be 2 chunks (64 + 36)
+            f.write(b"A" * (chunk_size + 10))
 
         sender = FileSender(self.gw_sender, self.test_file)
         receiver = FileReceiver(self.gw_receiver)
@@ -79,24 +80,27 @@ class TestFileSharing(unittest.TestCase):
         receiver.handle_data(self.gw_sender.sent_data.pop(0))
         sender.handle_response(self.gw_receiver.sent_data.pop(0))
 
-        # Send only first chunk
+        # Chunks are now in self.gw_sender.sent_data
+        self.assertEqual(len(self.gw_sender.sent_data), 2)
         chunk0 = self.gw_sender.sent_data.pop(0)
         chunk1 = self.gw_sender.sent_data.pop(0)
 
+        # Receiver gets only chunk 0
         receiver.handle_data(chunk0)
         self.assertEqual(len(receiver.received_chunks), 1)
         self.assertEqual(receiver.state, "RECEIVING")
 
-        # Manually trigger NACK for chunk 1
+        # Manually trigger NACK for missing chunks
         receiver.request_missing()
         nack = self.gw_receiver.sent_data.pop(0)
         self.assertTrue(nack.startswith(FileSharingProtocol.NACK_PREFIX))
+        self.assertIn(b"1", nack)
 
-        # Sender handles NACK
+        # Sender handles NACK and resends chunk 1
         res = sender.handle_response(nack)
         self.assertTrue(res)
 
-        # Receiver gets retransmitted chunk
+        # Receiver gets retransmitted chunk 1
         re_chunk1 = self.gw_sender.sent_data.pop(0)
         self.assertEqual(re_chunk1, chunk1)
         res = receiver.handle_data(re_chunk1)
