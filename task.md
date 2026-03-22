@@ -1,8 +1,10 @@
 # Task
-Your task is to fix bugs in the app by:
-1. Refactoring the code. Currently some files are kilometers long and difficult to read. Break them down into smaller, more manageable pieces, use foldered packages if needed, and ensure that each file has a clear purpose.
-2. Making a simulator for the most vulnerable parts of the app. This will allow you to test your fixes in a controlled environment before deploying them to production. E.g. to simulate the file sharing protocol, use 2 instances of the class, or whatever, and have them interact with each other. Use normal behaviour, than use nack handshake case, and other edge cases. This will help you identify any remaining bugs and ensure that your fixes are effective. Also simulate remote control command querying and other critical features of the app to ensure they are working correctly after your changes. This will give you confidence that your fixes are robust and won't introduce new issues.
-3. Writing unit tests for the refactored code. This will help you catch any regressions and ensure that your fixes are working as intended. Rewrite existing tests if needed to fit the new structure of the code. Aim for high test coverage, especially for the critical parts of the app.
+1. Make a feature to set volume in settings, ggwave encode has volume setting. Read volume docs on ggwave page on github.
+2. Remove all default remote command templates, like shutdown / play music. Also make the toggle in settings menu allow remote commands to be executed.
+3. Make a folder of sample remote templates, and add a cli app to import them into the appdata folder. This way users can easily add remote commands without having to create them from scratch.
+4. Fix bug in file sharing protocol.
 
-For now, the app broke and doesn't identify file handshake. Suggested improvements:
-All headers should start with something non-ascii to avoid it accidentally appearing in the sent text message or remote command. For example, you could use a specific byte sequence that is unlikely to occur in normal text, such as `0xFF 0xFE` or `0x00 0x01`. This way, when the app receives a message, it can check for the presence of this unique header to determine if it's a file handshake or a regular message.
+
+## File sharing bugs
+1. When handshaking, the receiver sends an answer so quickly that the sender doesn't have time to switch to receive mode, causing the handshake to fail. The sender should wait a bit before sending the handshake request, or the receiver should wait a bit before sending the answer. This happens everywhere so often that we call it SAR (Send after receive) issue. It happens after sending the file / before nack, after nack / before nacked chunks, and everywhere where it communicates. Make a 500 ms delay before responding to every request in all places: in file send and remote query protocol.
+2. Dont know what's happening, but sometimes after eof is sent and the receiver sends the nack, the sender sends something else at the same time (overlapped signals) and everyone gets confused. Investigate this issue.
