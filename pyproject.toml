@@ -11,9 +11,13 @@ dependencies = [
     "sounddevice",
     "cython",
     "rust-enum",
-    "wxpython",
+    "wxpython; sys_platform == 'win32' or sys_platform == 'darwin'",
     "accessible_output3",
 ]
+
+[project.optional-dependencies]
+gui = ["wxpython"]
+test = ["pytest"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["/"]

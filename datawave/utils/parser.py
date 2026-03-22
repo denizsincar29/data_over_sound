@@ -1,8 +1,5 @@
 """
 Text parsing module for extracting URLs, emails, and phone numbers.
-
-This module provides regular expressions and functions to extract
-structured information from received text data.
 """
 
 import re
@@ -30,7 +27,6 @@ phone_pattern = re.compile(
     r'\d{3,4}[-.\s]?\d{3,4}\b'           # Main number
 )
 
-
 def extract_info(text: str) -> Dict[str, List[str]]:
     """
     Extract URLs, emails, and phone numbers from text.
@@ -50,16 +46,3 @@ def extract_info(text: str) -> Dict[str, List[str]]:
         "emails": emails,
         "phones": phones
     }
-
-# Example usage
-if __name__ == "__main__":
-    text = """
-    Here are some test examples:
-    Visit http://example.com or https://localhost:8080/path for info. 
-    Contact us at test@example.com or call +1-800-555-1234, (123) 456-7890, or 555-6789.
-    """
-    
-    result = extract_info(text)
-    print("URLs:", result["urls"])
-    print("Emails:", result["emails"])
-    print("Phones:", result["phones"])
