@@ -184,7 +184,7 @@ class RemoteControlService:
 
         return None
 
-    def create_plugin_template(self, name: str) -> Tuple[bool, str]:
+    def create_plugin_template(self, name: str) -> tuple[bool, str]:
         plugin_path = os.path.join(PLUGINS_DIR, name)
         if os.path.exists(plugin_path):
             return False, f"Plugin folder '{name}' already exists."
