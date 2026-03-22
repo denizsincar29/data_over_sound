@@ -185,7 +185,13 @@ class ProtocolDispatcher:
         for cmd_name in self.remote_control.commands:
             payload = f"{cmd_name}:".encode()
             packet = Packet(OpCode.REMOTE_COMMAND, payload)
-            waveform = self.gateway.engine.encode(packet.encode(), self.gateway.protocol)
+
+            # Use normalized 100 volume for exported files
+            with threading.Lock(): # Temporary override settings volume
+                old_vol = settings.get("volume", 50)
+                settings.set("volume", 100)
+                waveform = self.gateway.engine.encode(packet.encode(), self.gateway.protocol)
+                settings.set("volume", old_vol)
 
             if waveform is not None:
                 filename = os.path.join(output_dir, f"{cmd_name}.wav")

@@ -31,7 +31,7 @@ def import_template(template_name):
 
 def main():
     parser = argparse.ArgumentParser(description="Import remote command templates into DataWave.")
-    parser.add_index = parser.add_argument("--list", action="store_true", help="List available templates")
+    parser.add_argument("--list", action="store_true", help="List available templates")
     parser.add_argument("--all", action="store_true", help="Import all templates")
     parser.add_argument("templates", nargs="*", help="Specific templates to import (e.g., shutdown.py)")
 
