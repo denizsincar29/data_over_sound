@@ -13,6 +13,7 @@ class OpCode(IntEnum):
     QUERY_EOF = 0x03
     REMOTE_COMMAND = 0x04
     REMOTE_RPC = 0x05
+    QUERY_DENIED = 0x06
 
     # File sharing commands (0x10 - 0x1F)
     FILE_HANDSHAKE = 0x10

@@ -5,6 +5,8 @@ Central dispatcher for handling incoming DataWave packets and routing to service
 import os
 import time
 import threading
+import wave
+import numpy as np
 from typing import Optional, Callable, Any, Dict, List
 from datawave.core.protocol import Packet, OpCode
 from datawave.core.gateway import Gateway
@@ -69,12 +71,13 @@ class ProtocolDispatcher:
 
     def _handle_receiver_status(self, status: str, details: Any) -> None:
         """Handle status updates from FileReceiver."""
+        sar_delay = settings.get("sar_delay", 500) / 1000.0
         if status == "SEND_READY":
             self.log_callback(f"Receiving file: {self.file_receiver.filename} ({self.file_receiver.num_chunks} chunks)")
             if self.progress_callback:
                 self.progress_callback(0, self.file_receiver.num_chunks)
             # Delayed send READY to follow SAR
-            self.gateway.delayed_send(Packet(OpCode.FILE_READY).encode(), protocol=FileTransferProtocol.FILE_PROTOCOL_ID)
+            self.gateway.delayed_send(Packet(OpCode.FILE_READY).encode(), protocol=FileTransferProtocol.FILE_PROTOCOL_ID, delay=sar_delay)
 
         elif status == "CHUNK_RECEIVED":
             if self.progress_callback:
@@ -84,12 +87,12 @@ class ProtocolDispatcher:
             self.log_callback(f"File received successfully: {self.file_receiver.filename}")
             if self.progress_callback:
                 self.progress_callback(self.file_receiver.num_chunks, self.file_receiver.num_chunks)
-            self.gateway.delayed_send(Packet(OpCode.FILE_SUCCESS).encode(), protocol=FileTransferProtocol.FILE_PROTOCOL_ID)
+            self.gateway.delayed_send(Packet(OpCode.FILE_SUCCESS).encode(), protocol=FileTransferProtocol.FILE_PROTOCOL_ID, delay=sar_delay)
             self.file_receiver.reset()
 
         elif status == "SEND_NACK":
             nack_data = ",".join(map(str, details)).encode()
-            self.gateway.delayed_send(Packet(OpCode.FILE_NACK, nack_data).encode(), protocol=FileTransferProtocol.FILE_PROTOCOL_ID)
+            self.gateway.delayed_send(Packet(OpCode.FILE_NACK, nack_data).encode(), protocol=FileTransferProtocol.FILE_PROTOCOL_ID, delay=sar_delay)
 
         elif status == "ERROR" or status == "ABORT":
             self.log_callback(f"File reception error: {details}")
@@ -97,20 +100,24 @@ class ProtocolDispatcher:
     def _start_sending_thread(self) -> None:
         def send_all():
             if not self.file_sender: return
-            time.sleep(0.5) # SAR delay
+            sar_delay = settings.get("sar_delay", 500) / 1000.0
+            sub_delay = settings.get("subsequent_delay", 100) / 1000.0
+            time.sleep(sar_delay)
             for i in range(self.file_sender.num_chunks):
                 self.gateway.send(self.file_sender.get_chunk_packet(i).encode(), protocol=FileTransferProtocol.FILE_PROTOCOL_ID)
-                time.sleep(0.1) # Small delay between chunks to avoid flooding
+                time.sleep(sub_delay) # Small delay between chunks to avoid flooding
             self.gateway.send(self.file_sender.get_eof_packet().encode(), protocol=FileTransferProtocol.FILE_PROTOCOL_ID)
         threading.Thread(target=send_all, daemon=True).start()
 
     def _resend_chunks_thread(self, indices: List[int]) -> None:
         def resend():
             if not self.file_sender: return
-            time.sleep(0.5) # SAR delay
+            sar_delay = settings.get("sar_delay", 500) / 1000.0
+            sub_delay = settings.get("subsequent_delay", 100) / 1000.0
+            time.sleep(sar_delay)
             for i in indices:
                 self.gateway.send(self.file_sender.get_chunk_packet(i).encode(), protocol=FileTransferProtocol.FILE_PROTOCOL_ID)
-                time.sleep(0.1)
+                time.sleep(sub_delay)
             self.gateway.send(self.file_sender.get_eof_packet().encode(), protocol=FileTransferProtocol.FILE_PROTOCOL_ID)
         threading.Thread(target=resend, daemon=True).start()
 
@@ -168,3 +175,27 @@ class ProtocolDispatcher:
     def stop(self) -> None:
         """Stop all services and gateway."""
         self.gateway.stop()
+
+    def save_remote_sounds_to_wav(self, output_dir: str = "recs") -> str:
+        """Generate and save WAV files for all discovered remote commands."""
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        count = 0
+        for cmd_name in self.remote_control.commands:
+            payload = f"{cmd_name}:".encode()
+            packet = Packet(OpCode.REMOTE_COMMAND, payload)
+            waveform = self.gateway.engine.encode(packet.encode(), self.gateway.protocol)
+
+            if waveform is not None:
+                filename = os.path.join(output_dir, f"{cmd_name}.wav")
+                # Convert float32 to int16 for WAV
+                int_wf = (waveform * 32767).astype(np.int16)
+                with wave.open(filename, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(48000)
+                    wf.writeframes(int_wf.tobytes())
+                count += 1
+
+        return f"Saved {count} remote command sounds to {output_dir}/"

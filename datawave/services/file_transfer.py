@@ -123,8 +123,6 @@ class FileReceiver:
                             if index not in self.received_chunks:
                                 self.received_chunks[index] = chunk_data
                             self.last_activity = time.time()
-                            if len(self.received_chunks) == self.num_chunks:
-                                return self.check_completion()
                             return ("CHUNK_RECEIVED", index)
                     except (ValueError, TypeError):
                         pass
@@ -145,6 +143,9 @@ class FileReceiver:
                         self.reset()
                         return ("ABORT", msg)
                 else:
+                    if len(self.received_chunks) == self.num_chunks:
+                        return self.check_completion()
+
                     missing = [i for i in range(self.num_chunks) if i not in self.received_chunks]
                     if missing:
                         self.last_activity = time.time()
