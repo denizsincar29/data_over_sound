@@ -30,6 +30,14 @@ class MainFrame(wx.Frame):
         panel = wx.Panel(self)
         vbox = wx.BoxSizer(wx.VERTICAL)
 
+        # Volume Slider
+        hbox_vol = wx.BoxSizer(wx.HORIZONTAL)
+        hbox_vol.Add(wx.StaticText(panel, label="Volume:"), flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=5)
+        self.vol_slider = wx.Slider(panel, value=settings.get("volume", 50), minValue=0, maxValue=100, style=wx.SL_HORIZONTAL | wx.SL_LABELS)
+        self.vol_slider.Bind(wx.EVT_SLIDER, self.OnVolumeChange)
+        hbox_vol.Add(self.vol_slider, proportion=1, flag=wx.EXPAND)
+        vbox.Add(hbox_vol, flag=wx.EXPAND | wx.ALL, border=5)
+
         # Message History
         self.history = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY)
         vbox.Add(self.history, proportion=1, flag=wx.EXPAND | wx.ALL, border=5)
@@ -103,6 +111,20 @@ class MainFrame(wx.Frame):
         settingsMenu.AppendSubMenu(inputMenu, 'Input Device')
         settingsMenu.AppendSubMenu(outputMenu, 'Output Device')
 
+        settingsMenu.AppendSeparator()
+        remoteEnableItem = settingsMenu.Append(wx.ID_ANY, 'Enable Remote Commands', kind=wx.ITEM_CHECK)
+        remoteEnableItem.Check(settings.get("enable_remote_commands", False))
+        self.Bind(wx.EVT_MENU, self.OnToggleRemoteCommands, remoteEnableItem)
+
+        # Advanced Settings Submenu
+        advMenu = wx.Menu()
+        sarItem = advMenu.Append(wx.ID_ANY, 'Set SAR Delay...')
+        self.Bind(wx.EVT_MENU, lambda evt: self.OnSetDelay("sar_delay", "SAR Delay (ms)"), sarItem)
+        subItem = advMenu.Append(wx.ID_ANY, 'Set Subsequent Delay...')
+        self.Bind(wx.EVT_MENU, lambda evt: self.OnSetDelay("subsequent_delay", "Subsequent Delay (ms)"), subItem)
+
+        settingsMenu.AppendSubMenu(advMenu, 'Advanced')
+
         self.menubar.Append(settingsMenu, '&Settings')
         self.SetMenuBar(self.menubar)
         self.Show()
@@ -119,6 +141,9 @@ class MainFrame(wx.Frame):
         self.remoteMenu.AppendSeparator()
         queryItem = self.remoteMenu.Append(wx.ID_ANY, "Query Remote Functions")
         self.Bind(wx.EVT_MENU, self.dispatcher.query_remote, queryItem)
+
+        saveWavItem = self.remoteMenu.Append(wx.ID_ANY, "Save Remote Sounds to WAV")
+        self.Bind(wx.EVT_MENU, self.OnSaveRemoteSounds, saveWavItem)
 
     def OnSend(self, event):
         msg = self.input_text.GetValue()
@@ -147,6 +172,28 @@ class MainFrame(wx.Frame):
     def OnProtocolDialog(self, event):
         # Placeholder for complex protocol dialog
         pass
+
+    def OnVolumeChange(self, event):
+        val = self.vol_slider.GetValue()
+        settings.set("volume", val)
+
+    def OnToggleRemoteCommands(self, event):
+        settings.set("enable_remote_commands", event.IsChecked())
+
+    def OnSetDelay(self, key, label):
+        current = settings.get(key, 500 if "sar" in key else 100)
+        dlg = wx.TextEntryDialog(self, f"Enter {label}:", "Advanced Settings", str(current))
+        if dlg.ShowModal() == wx.ID_OK:
+            try:
+                val = int(dlg.GetValue())
+                settings.set(key, val)
+            except ValueError:
+                wx.MessageBox("Invalid value. Please enter an integer.", "Error", wx.OK | wx.ICON_ERROR)
+        dlg.Destroy()
+
+    def OnSaveRemoteSounds(self, event):
+        msg = self.dispatcher.save_remote_sounds_to_wav()
+        wx.MessageBox(msg, "Save Remote Sounds", wx.OK | wx.ICON_INFORMATION)
 
     def OnSelectDevice(self, type, idx):
         devs = settings.get("devices")

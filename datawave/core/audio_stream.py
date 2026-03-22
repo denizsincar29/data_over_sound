@@ -64,15 +64,17 @@ class AudioStream:
         status: sd.CallbackFlags
     ) -> None:
         """Internal audio callback."""
+        is_sending = False
         # Priority: send data if available
         try:
             audio_chunk = self.send_queue.get_nowait()
             outdata[:] = audio_chunk.reshape(outdata.shape)
+            is_sending = True
         except queue.Empty:
             outdata[:] = 0
 
-        # Process input data via external callback
-        if indata is not None:
+        # Process input data via external callback if not sending (avoid self-hearing)
+        if indata is not None and not is_sending:
             self.callback(indata)
 
     def queue_audio(self, waveform: np.ndarray) -> None:

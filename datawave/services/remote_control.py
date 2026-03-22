@@ -68,13 +68,6 @@ class RemoteControlService:
     def load_plugins(self) -> None:
         self.commands.clear()
 
-        # Default commands
-        self.commands["shutdown"] = self._shutdown
-        self.commands["restart"] = self._restart
-        self.commands["exit"] = self._exit_app
-        self.commands["open_url"] = self._open_url
-        self.commands["play_music"] = self._play_music
-
         if not os.path.exists(PLUGINS_DIR):
             return
 
@@ -136,13 +129,19 @@ class RemoteControlService:
         """Process remote control packets."""
         if packet.opcode == OpCode.QUERY_REMOTE:
             if not settings.get("enable_remote_commands", False):
-                return None
+                def deny():
+                    time.sleep(settings.get("sar_delay", 500) / 1000.0)
+                    gateway.send(Packet(OpCode.QUERY_DENIED, b"nah i dont allow remote!").encode())
+                threading.Thread(target=deny, daemon=True).start()
+                return "Remote query denied (disabled in settings)."
 
             def respond():
-                time.sleep(0.5) # SAR delay
+                sar_delay = settings.get("sar_delay", 500) / 1000.0
+                sub_delay = settings.get("subsequent_delay", 100) / 1000.0
+                time.sleep(sar_delay)
                 for name in self.commands.keys():
                     gateway.send(Packet(OpCode.QUERY_RESPONSE, name.encode()).encode())
-                    time.sleep(0.5)
+                    time.sleep(sub_delay)
                 gateway.send(Packet(OpCode.QUERY_EOF).encode())
 
             threading.Thread(target=respond, daemon=True).start()
@@ -159,6 +158,10 @@ class RemoteControlService:
             if self.query_active:
                 self.query_active = False
                 return f"Remote query complete. Found: {', '.join(self.query_functions)}"
+
+        elif packet.opcode == OpCode.QUERY_DENIED:
+            self.query_active = False
+            return f"Remote device denied query: {packet.payload.decode()}"
 
         elif packet.opcode == OpCode.REMOTE_COMMAND:
             if not settings.get("enable_remote_commands", False):
@@ -206,28 +209,3 @@ class {name.capitalize()}Plugin(BasePlugin):
         except Exception as e:
             return False, f"Error creating plugin: {e}"
 
-    # Default command implementations
-    def _shutdown(self, *args):
-        if sys.platform == "win32": os.system("shutdown /s /t 1")
-        else: os.system("shutdown -h now")
-        return "Shutting down..."
-
-    def _restart(self, *args):
-        if sys.platform == "win32": os.system("shutdown /r /t 1")
-        else: os.system("shutdown -r now")
-        return "Restarting..."
-
-    def _exit_app(self, *args):
-        os._exit(0)
-
-    def _open_url(self, url=None, *args):
-        from webbrowser import open as wopen
-        if url:
-            wopen(url)
-            return f"Opening {url}"
-        return "No URL provided"
-
-    def _play_music(self, *args):
-        from webbrowser import open as wopen
-        wopen("https://www.youtube.com/results?search_query=music")
-        return "Playing music..."

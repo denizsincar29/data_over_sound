@@ -37,7 +37,10 @@ class Settings:
             "payload_length": -1,
             "enable_remote_protocol_change": True,
             "enable_remote_commands": False,
-            "hotkeys": {}
+            "hotkeys": {},
+            "volume": 50,
+            "sar_delay": 500,
+            "subsequent_delay": 100
         }
         self.load()
 

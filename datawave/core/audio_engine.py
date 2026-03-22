@@ -7,6 +7,7 @@ from threading import Lock
 import numpy as np
 import ggwave
 from typing import Optional, Callable, Dict, Any
+from datawave.utils.settings import settings
 
 # Initial configuration constants
 RATE = 48000
@@ -36,8 +37,9 @@ class AudioEngine:
         """
         Encode bytes into a floating-point audio waveform.
         """
+        volume = settings.get("volume", 50)
         with self._instance_lock:
-            encoded = ggwave.encode(data, protocolId=protocol_id, instance=self.instance)
+            encoded = ggwave.encode(data, protocolId=protocol_id, volume=volume, instance=self.instance)
             if not encoded:
                 return None
 
